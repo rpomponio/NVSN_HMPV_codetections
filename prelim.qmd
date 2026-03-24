@@ -1,0 +1,125 @@
+---
+title: "HMPV Co-detections Preliminary Analysis"
+author: "Ray Pomponio"
+date: today
+output-file: "Preliminary Analysis Mar 2026.html"
+format:
+  html:
+    embed-resources: true
+execute:
+  echo: false
+  warning: false
+fig-cap-location: top
+---
+
+```{r}
+library(data.table)
+library(ggplot2)
+library(ggpubr)
+theme_set(theme_pubclean(base_size=18))
+```
+
+```{r}
+# load data from CDC; perform superficial clean-up
+cdc <- fread("Data/Pitt_Anna_HMPV_DEC25.csv")
+dat <- cdc[research_tested==1]
+dat[is.na(respvisitdt), respvisitdt:=as.IDate(as.Date(scrdate, format="%m/%d/%Y"))]
+dat[tmpv>=2, tmpv:=NA]
+dat[c_rsv_result>=2, c_rsv_result:=NA]
+```
+
+## Study Population
+
+This analytical dataset contains all NVSN enrollments of acute respiratory illness (ARI), recruited in hospitals, emergency departments, outpatient clinics, and urgent care clinics from `r format(min(dat$respvisitdt), "%b %d %Y")` to `r format(max(dat$respvisitdt), "%b %d %Y")`. Cases were excluded if research testing was not performed (n=`r format(sum(cdc$research_tested!=1), big.mark=",")`).
+
+## Epidemiological Curves
+
+```{r}
+# by months--record no. hmpv, rsv, overall
+bmo <- dat[, .(hmpv=sum(tmpv, na.rm=TRUE), rsv=sum(c_rsv_result, na.rm=TRUE), .N),
+           by=round(respvisitdt, "months")]
+```
+
+```{r}
+# by months and age-group--record no. hmpv, rsv, overall
+dat[, agegrp:=fcase(c_agemonths < 24, "<2 y.o.", c_agemonths >= 24, "2+ y.o.")]
+bma <- dat[, .(hmpv=sum(tmpv, na.rm=TRUE), rsv=sum(c_rsv_result, na.rm=TRUE), .N),
+           by=.(round(respvisitdt, "months"), agegrp)]
+```
+
+[In @fig-epi-curves-overall we observe seven distinct peaks in RSV case positivity during the period, beginning in the winter of 2017-18. Following these peaks in RSV, we observe lagged peaks in HMPV occurring several months later. Relative timing of the two viruses was consistent after the pandemic. During the pandemic, specifically the winter of 2020-21, we did not observe any positive cases of either virus, possibly due to societal response measures altering the circulation of respiratory viruses.]{.aside}
+
+```{r}
+#| label: fig-epi-curves-overall
+#| fig-cap: "Epi Curves (case positivity rates) for HMPV and RSV, All ages"
+bmo <- melt(bmo, id.vars=c(1, 4), variable.name="virus", value.name="cases")
+bmo[, cprt:=cases / N]
+ggplot(bmo[order(round, virus)], aes(x=round, y=cprt, fill=virus)) +
+  geom_path(aes(color=virus)) +
+  geom_area(alpha=0.25, position="identity") +
+  scale_x_date(limits=c(as.IDate("2017-01-01"), as.IDate("2024-12-31"))) +
+  scale_y_continuous(limits=c(0, 0.6), breaks=seq(0, 0.6, 0.15), labels=seq(0, 60, 15)) +
+  labs(x="Surveillance month", y="% Positivity")
+```
+
+[In @fig-epi-curves-by-age we observe similarity across age groups when identifying peaks in RSV and HMPV case positivity. Patterns of relative timing were generally consistent across age groups, with peaks in RSV occuring several months before peaks in HMPV.]{.aside}
+
+```{r}
+#| label: fig-epi-curves-by-age
+#| fig-cap: "Epi Curves (case positivity rates) for HMPV and RSV, by Age group"
+bma <- melt(bma, id.vars=c(1:2, 5), variable.name="virus", value.name="cases")
+bma[, cprt:=cases / N]
+ggplot(bma[order(round, virus)], aes(x=round, y=cprt, fill=virus)) +
+  facet_wrap(~agegrp, scales="free_y", ncol=1, nrow=2) +
+  geom_path(aes(color=virus)) +
+  geom_area(alpha=0.25, position="identity") +
+  scale_x_date(limits=c(as.IDate("2017-01-01"), as.IDate("2024-12-31"))) +
+  scale_y_continuous(limits=c(0, 0.6), breaks=seq(0, 0.6, 0.2), labels=seq(0, 60, 20)) +
+  labs(x="Surveillance month", y="% Positivity")
+```
+
+```{r}
+#| label: fig-epi-bars-coinfected
+#| fig-cap: "HMPV-positive Detections by Month, Proportion co-infected with RSV (blue)"
+dat[!is.na(tmpv), codetected:=ifelse(tmpv==1 & c_rsv_result==1, 1, 0)]
+bmo2 <- dat[, .(hmpv=sum(tmpv, na.rm=TRUE), dual=sum(codetected, na.rm=TRUE), .N),
+           by=round(respvisitdt, "months")]
+ggplot(bmo2, aes(x=round, y=hmpv)) +
+  geom_col() +
+  geom_col(aes(y=dual), fill="lightblue") +
+  scale_x_date(limits=c(as.IDate("2017-01-01"), as.IDate("2024-12-31"))) +
+  labs(x="Surveillance month", y="HMPV/Dual Detections")
+```
+
+
+## Summary Tables
+
+```{r}
+library(gtsummary)
+```
+
+```{r}
+#| label: tbl-hmpv-by-pandemic
+#| tbl-cap: "HMPV-positive Detections by Pandemic Era"
+dat[, era:=fcase(
+  respvisitdt <= as.IDate("2020-03-01"), "prepandemic",
+  respvisitdt >= as.IDate("2021-01-01"), "postpandemic",
+  default="peripandemic")]
+dat[, era:=factor(era, c("prepandemic", "peripandemic", "postpandemic"))]
+tbl_summary(
+  dat[tmpv==1],
+  by=era,
+  label=list(c_agemonths ~ "Age, months", tmpvCT ~ "CT Value, HMPV",
+             codetected ~ "RSV co-detected"),
+  include=c(c_agemonths, tmpvCT, codetected)) |>
+  add_overall(last=TRUE) |>
+  modify_header(label="**Surveillance Era**") |>
+  modify_footnote_header(
+  footnote="Peripandemic was defined as the period between Mar. 1, 2020 and Jan 1. 2021.",
+  columns="label")
+```
+
+
+## Findings & Follow-up
+
+Co-circulation of HMPV and RSV was apparent in all seasons, but most prominent in seasons before the pandemic. It is possibly concerning for an analysis of co-infections, because we will not be able to rule-out the etiology of RSV in determining illness severity. Age group did not appear to modify the co-circulation patterns; therefore, it is reasonable to group all ages together and control for age as a risk factor. Co-circulation was not observed in the 2020-21 season due to the pandemic. We might consider modifying the effect of co-infection by time period, with cases enrolled after 2020 grouped as a temporal category. Such a design would elicit whether effects of co-infection on severity were altered after the pandemic, compared to before the pandemic.
