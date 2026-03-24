@@ -17,6 +17,7 @@ library(data.table)
 library(ggplot2)
 library(ggpubr)
 theme_set(theme_pubclean(base_size=18))
+library(gtsummary)
 ```
 
 ```{r}
@@ -30,7 +31,7 @@ dat[c_rsv_result>=2, c_rsv_result:=NA]
 
 ## Study Population
 
-This analytical dataset contains all NVSN enrollments of acute respiratory illness (ARI), recruited in hospitals, emergency departments, outpatient clinics, and urgent care clinics from `r format(min(dat$respvisitdt), "%b %d %Y")` to `r format(max(dat$respvisitdt), "%b %d %Y")`. Cases were excluded if research testing was not performed (n=`r format(sum(cdc$research_tested!=1), big.mark=",")`).
+This analytical dataset contains all NVSN enrollments of acute respiratory illness (ARI), recruited in hospitals, emergency departments, outpatient clinics, and urgent care clinics from `r format(min(dat$respvisitdt), "%b %d %Y")` to `r format(max(dat$respvisitdt), "%b %d %Y")`. Cases were excluded if research testing was not performed (n=`r format(sum(cdc$research_tested!=1), big.mark=",")` exclusions).
 
 ## Epidemiological Curves
 
@@ -78,40 +79,58 @@ ggplot(bma[order(round, virus)], aes(x=round, y=cprt, fill=virus)) +
   labs(x="Surveillance month", y="% Positivity")
 ```
 
+[In @fig-epi-bars-codetected we observe co-detections represented a minority of overall HMPV detections. However, certain viruses were commonly co-detected with HMPV throughout the period. For example, rhino/enterovirus (orange) was the most commonly co-detected pathogen. Depending on the time period, adenovirus (purple) was co-detected with HMPV in some seasons but not others.]{.aside}
+
 ```{r}
-#| label: fig-epi-bars-coinfected
-#| fig-cap: "HMPV-positive Detections by Month, Proportion co-infected with RSV (blue)"
-dat[!is.na(tmpv), codetected:=ifelse(tmpv==1 & c_rsv_result==1, 1, 0)]
-bmo2 <- dat[, .(hmpv=sum(tmpv, na.rm=TRUE), dual=sum(codetected, na.rm=TRUE), .N),
-           by=round(respvisitdt, "months")]
+#| label: fig-epi-bars-codetected
+#| fig-cap: "HMPV-positive Detections by Month, Proportion of co-detections"
+dat[!is.na(tmpv), codetected:=fcase(
+  tmpv==1 & c_rsv_result==1, "RSV",
+  tmpv==1 & anyflu_result==1, "Flu",
+  tmpv==1 & piv14_pos==1, "PIV",
+  tmpv==1 & tAdeno==1, "Adeno",
+  tmpv==1 & rhent_pos==1, "Rhino/Entero",  
+  default="None")]
+dat[, codetected:=factor(codetected, c("None", "RSV", "Flu", "PIV",
+                                       "Adeno", "Rhino/Entero"))]
+bmo2 <- dat[!is.na(tmpv), .(hmpv=sum(tmpv, na.rm=TRUE), .N),
+           by=.(codetected, round(respvisitdt, "months"))]
+
 ggplot(bmo2, aes(x=round, y=hmpv)) +
   geom_col() +
-  geom_col(aes(y=dual), fill="lightblue") +
+  geom_col(aes(fill=codetected)) +
+  scale_fill_manual(values=c(NA, "red", "blue", "green", "purple",
+                             "orange", "brown")) +
   scale_x_date(limits=c(as.IDate("2017-01-01"), as.IDate("2024-12-31"))) +
-  labs(x="Surveillance month", y="HMPV/Dual Detections")
+  labs(x="Surveillance month", y="HMPV/Co-Detections")
 ```
 
 
 ## Summary Tables
 
 ```{r}
-library(gtsummary)
-```
-
-```{r}
 #| label: tbl-hmpv-by-pandemic
 #| tbl-cap: "HMPV-positive Detections by Pandemic Era"
 dat[, era:=fcase(
-  respvisitdt <= as.IDate("2020-03-01"), "prepandemic",
-  respvisitdt >= as.IDate("2021-01-01"), "postpandemic",
-  default="peripandemic")]
-dat[, era:=factor(era, c("prepandemic", "peripandemic", "postpandemic"))]
+  respvisitdt <= as.IDate("2020-03-01"), "PRE-pandemic",
+  respvisitdt >= as.IDate("2021-01-01"), "POST-pandemic",
+  default="PERI-pandemic")]
+dat[, era:=factor(era, c("PRE-pandemic", "PERI-pandemic", "POST-pandemic"))]
+rvi.cols <- c("tAdeno", "anyflu_result", "rhent_pos", "piv14_pos")
+dat[, (rvi.cols) := lapply(.SD, function(x) fcase(x==1, 1, x==0, 0)),
+    .SDcols=rvi.cols]
 tbl_summary(
   dat[tmpv==1],
   by=era,
-  label=list(c_agemonths ~ "Age, months", tmpvCT ~ "CT Value, HMPV",
-             codetected ~ "RSV co-detected"),
-  include=c(c_agemonths, tmpvCT, codetected)) |>
+  label=list(c_agemonths ~ "Age, months",
+             tmpvCT ~ "CT Value, HMPV",
+             tAdeno ~ "Adenovirus co-detected",
+             c_rsv_result ~ "RSV co-detected",
+             anyflu_result ~ "Flu co-detected",
+             rhent_pos ~ "Rhino/entero co-detected",
+             piv14_pos ~ "PIV co-detected"),
+  include=c(c_agemonths, tmpvCT, tAdeno, c_rsv_result, anyflu_result,
+            rhent_pos, piv14_pos)) |>
   add_overall(last=TRUE) |>
   modify_header(label="**Surveillance Era**") |>
   modify_footnote_header(
@@ -122,4 +141,10 @@ tbl_summary(
 
 ## Findings & Follow-up
 
-Co-circulation of HMPV and RSV was apparent in all seasons, but most prominent in seasons before the pandemic. It is possibly concerning for an analysis of co-infections, because we will not be able to rule-out the etiology of RSV in determining illness severity. Age group did not appear to modify the co-circulation patterns; therefore, it is reasonable to group all ages together and control for age as a risk factor. Co-circulation was not observed in the 2020-21 season due to the pandemic. We might consider modifying the effect of co-infection by time period, with cases enrolled after 2020 grouped as a temporal category. Such a design would elicit whether effects of co-infection on severity were altered after the pandemic, compared to before the pandemic.
+### HMPV + RSV
+
+Co-circulation of HMPV and RSV was apparent in all seasons, but most prominent in seasons before the pandemic. It is possibly concerning for an analysis of co-detections, because we will not be able to rule-out the etiology of RSV in determining illness severity. Age group did not appear to modify the co-circulation patterns; therefore, it is reasonable to group all ages together and control for age as a risk factor. Co-circulation was not observed in the 2020-21 season due to the pandemic. We might consider modifying the effect of co-infection by time period, with cases enrolled after 2020 grouped as a temporal category. Such a design would elicit whether effects of co-infection on severity were altered after the pandemic, compared to before the pandemic.
+
+### HMPV + Other Viruses
+
+Co-detection of rhino/enterovirus was relatively common (12% overall), followed by co-detection of adenovirus (5% overall). Most viruses other than RSV were consistently co-detected before versus after the pandemic.
