@@ -3,8 +3,14 @@
 Project lead: Anna Wang-Erickson
 Proposal date: 3/26/2026
 
-Timeline:
+# Official Timeline
 
 * Q3 2026: Clinical data anlysis complete
 * Q4 2026: Manuscript drafted
 * Q2 2027: Manuscript publication
+
+# Action Items
+
+[ ] conduct preliminary analyses to review with Anna by 4/2
+[ ] submit revised data request to Leah Goldstein after one-pager approval
+[ ] identify 'pain points' and draft methodology for R21 submitted in Oct '26
