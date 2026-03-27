@@ -1,0 +1,281 @@
+---
+title: "HMPV Co-detections Epi Curves Analysis"
+subtitle: "Does the level of co-circulation correlate with the relative number of observed co-detections?"
+author: "Ray Pomponio"
+date: today
+output-file: "Epi Curves Analysis Mar 2026.html"
+format:
+  html:
+    embed-resources: true
+execute:
+  echo: false
+  warning: false
+fig-cap-location: margin
+---
+
+```{r}
+library(data.table)
+library(rstanarm)
+library(ggplot2)
+library(bayesplot)
+theme_set(bayesplot::theme_default())
+```
+## Data Preparation
+
+```{r}
+# load data from CDC; perform superficial clean-up
+cdc <- fread("Data/Pitt_Anna_HMPV_DEC25.csv")
+dat <- cdc[research_tested==1]
+dat[is.na(respvisitdt), respvisitdt:=as.IDate(as.Date(scrdate, format="%m/%d/%Y"))]
+dat[tmpv>=2, tmpv:=NA]
+dat[c_rsv_result>=2, c_rsv_result:=NA]
+```
+
+```{r}
+# weekly percent positivity and co-detection counts
+wpp <- dat[, .(tested=.N, hmpv=sum(tmpv, na.rm=T),
+               rsv=sum(c_rsv_result, na.rm=T),
+               codetected=sum(tmpv * c_rsv_result, na.rm=T)),
+           by=round(respvisitdt, "weeks")]
+```
+
+Below is a histogram of the outcome values:
+
+```{r}
+#| label: fig-outcome-histogram
+#| fig-cap: Histogram, Weekly co-detections of HMPV + RSV
+ggplot(wpp, aes(x=codetected)) +
+  geom_bar() +
+  labs(x="Weekly codetections", y="Frequency", subtitle=paste("N=", nrow(wpp)))
+```
+
+
+## Review of Bayesian Setup
+
+1. Joint distribution for the outcome and all unknowns.
+2. Draw from posterior distribution using MCMC.
+3. Evaluate how well the model fits the data, revise if necessary.
+4. Draw from posterior predictive distribution of outcome given interesting values of the predicotrs in order to visualize influence(s) of interest.
+
+### Likelihood Function
+
+We assume the weekly incidence of co-detections follows a Poisson distribution, governed by a single rate parameter $\lambda$:
+
+$$
+f(Y=y) = \frac{1}{y!}\lambda^ye^{-\lambda}
+$$
+
+The rate parameter must be positive. The appropriate link function for the Poisson generalized linear model maps between all real numbers (the support of the linear predictor $\eta$) and positive numbers only (the support of $\lambda$). The canonical link function is the log link:
+
+$$
+g(x)=\text{ln}(x)
+$$
+This architecture is identical for frequentist generalized linear models (GLMs).
+
+### Priors
+
+Bayesian analysis requires specified prios for the intercept, $\alpha$, and (slope) coefficients, $\beta$. 
+
+The following prior on the intercept suggests that weekly codetections would vary betweeen 0 and 10 counts, prior to observing any empirical data:
+
+$$
+\alpha \sim \text{normal}(-0.75, 1)
+$$
+
+```{r}
+#| label: fig-prior-intercept
+#| fig-cap: "Resulting outcome distribution given weakly-informative prior"
+set.seed(1818)
+eta <- rnorm(1000, mean=-0.75)
+hist(exp(eta), xlab="Weekly codetections")
+```
+
+The following priors on the coefficients suggest moderate conservatism; that is, we do not expect *a priori* any of the predictors to be meaningful:
+
+$$
+\beta \sim \text{normal}(0, 2.5)
+$$
+
+### Posterior
+
+With independent prios, the joint posterior distribution is proportional to the product of the priors and the $N$ likelihood contributions:
+
+$$
+f(\alpha, \beta | y, X) \propto f(\alpha) \times \prod_{k=1}^{K}f(\beta_k) \times \prod_{i=1}^N\frac{g^{-1}(\eta_i)^{y^i}}{y_i!}e^{-g^{-1}(\eta_i)}
+$$
+
+Note $i=1,...,N$ and $k=1, ...,K$ are simply counters for observations and predictors, respectively.
+
+## Poisson Regression
+
+Our goal is to make inferences about the effects of two pathogens' co-circulation on the frequency of co-detections in a given week.
+
+Importantly, the number of tests performed is not the same every week. Therefore we include tests as an *exposure* (not to be confused with epidemiologic "exposure" in the causal sense). The outcome in a given week $i$ is influenced by the expsore $\mu_i$ in a given week, as follows:
+
+$$
+y_i \sim \text{Poisson}(\mu_i\lambda_i)
+$$
+
+### Estimation
+
+```{r}
+# rescale predictors for aided interpretability & convergence
+wpp[, hmpvr:=scale(hmpv / tested)]
+wpp[, rsvr:=scale(rsv / tested)]
+wpp[, cocirc:=scale(hmpvr * rsvr)]
+```
+
+```{r}
+#| output: false
+# estimate frequentist model
+fit.freq <- glm(codetected ~ hmpvr + rsvr + cocirc, offset=log(tested),
+                data=wpp, family=poisson)
+# estimate Bayesian version
+fit.bayes <- stan_glm(
+  codetected ~ hmpvr + rsvr + cocirc, offset=log(tested),
+  data=wpp, family=poisson,
+  prior=normal(0, 2.5),
+  prior_intercept=normal(-0.75, 1),
+  seed=2024)
+```
+
+Here is a summary of the posterior draws, indicating the uncertainty of the parameter distributions.
+
+```{r}
+mcmc_areas(fit.bayes, pars=c("hmpvr", "rsvr", "cocirc"))
+```
+
+Note, the median estimate of the intercept suggests baseline frequency of codetections, assuming average levels of HMPV and RSV, is about `r format(exp(coef(fit.bayes)[1]) * 100, digits=3)` cases per 100 respiratory tests. Thus, the outcome is a relatively rare occurrence.
+
+### Asessment of Fit
+
+```{r}
+# generate outcome replicates based on posterior draws
+yrep <- posterior_predict(fit.bayes)
+```
+
+```{r}
+#| label: fig-check-pzero
+#| fig-cap: "The proportion of weeks with zero codetections is drawn with the solid blue line. The posterior predictive distribution is shown in the light blue histogram. Because the distribution is centered around the observed value, this check indicates a proper model fit."
+pzero <- function(y) mean(y==0)
+pp_check(fit.bayes, plotfun="stat", stat="pzero", binwidth=0.01)
+```
+
+Next I will assess the fit based on consecutive weeks at or above 1 codetection (treating this as an arbitrary threshold of co-infection prevalence). 
+
+```{r}
+#| label: fig-check-consec
+#| fig-cap: "A posterior predictive check of the proportion of consecutive weeks with codetections suggests the model tends to overestimate frequencies of this event. One possible explanation for this phenomenon is serial correlation--weekly codetections might be (negatively) correlated meaning a codetection in one week is associated with lower likelihood of codetection in an adjacent week. While not fatal, this shift in the distribution suggests a potential flaw in the model assumptions."
+pconsec <- function(y) mean(y * lag(y))
+pp_check(fit.bayes, plotfun="stat", stat="pconsec", binwidth=0.01)
+```
+
+### Analyzing Predictor Influences
+
+Rather than interpreting the model estimates directly, which is common in the frequentist approach, the posterior distribution can be used to analyze direct influences of the predictors on the outcome. 
+
+Let's consider two hypothetical periods of surveillance, the first representing a week during HMPV season without significant co-circulation of RSV (similar to 2021-22), with the second representing a season in which both pathogens are co-circulating (similar to 2017-18). 
+
+```{r}
+newdata <- data.table(hmpvr=c(2.2, 0.9), rsvr=c(-0.5, 1.9))
+newdata[, cocirc:=hmpvr * rsvr]
+newdata[, cocircr:=(cocirc - wpp[, mean(hmpvr * rsvr)]) / wpp[, sd(hmpvr * rsvr)]]
+```
+
+We then generate replicate of the "simulated" outcome based on posterior draws. In essence, we want to see the effect of a realistic pattern of co-circulation on co-detection. The resulting distribution gives us the difference in the number of co-detections (per 100 tests) between the former and latter scenarios.
+
+```{r}
+ynew <- posterior_predict(fit.bayes, newdata, offset=rep(log(100), 2))
+summary(apply(ynew, 1, diff))
+```
+
+Here is an attempt to illustrate this:
+
+```{r}
+# plotting the low co-circulation scenario
+p1 <- wpp[between(round, as.IDate("2021-10-01"), as.IDate("2022-04-01"))] |>
+  melt(id.vars=c(1:2, 5:8), variable.name="virus", value.name="cases") |>
+  ggplot(aes(x=round, y=cases, fill=virus)) +
+  geom_col(position="identity", width=4, alpha=0.5) +
+  scale_x_date(limits=c(as.IDate("2021-10-01"), as.IDate("2022-04-01"))) +
+  geom_vline(xintercept=as.IDate("2021-12-24"), linetype="dashed") +
+  xlab(NULL)
+# plotting the high co-circulation scenario
+p2 <- wpp[between(round, as.IDate("2017-10-01"), as.IDate("2018-04-01"))] |>
+  melt(id.vars=c(1:2, 5:8), variable.name="virus", value.name="cases") |>
+  ggplot(aes(x=round, y=cases, fill=virus)) +
+  geom_col(position="identity", width=4, alpha=0.5) +
+  scale_x_date(limits=c(as.IDate("2017-10-01"), as.IDate("2018-04-01"))) +
+  geom_vline(xintercept=as.IDate("2017-12-24"), linetype="dashed") +
+  xlab(NULL)
+# plotting the simulated differences in scenarios
+p3 <- data.frame(ydiff=ynew[, 2] - ynew[, 1]) |>
+  ggplot(aes(x=ydiff)) +
+  geom_bar() +
+  labs(x="Co-detections per 100 cases")
+```
+
+```{r}
+#| label: fig-simulated-diffs
+#| fig-cap: "The subplots in the top row demonstrate actual case counts for two co-circulating viruses. During the 2017-18 season, co-circulation was high. During the 2021-22 season, co-circulation was low. The histogram on the bottom demonstrates simulated co-detections for the week of Dec 24, taking the difference between the former and latter seasons. When the difference is greater than zero, we expect that co-circulation would result in higher co-detection likelihood."
+ggpubr::ggarrange(p2, p1, NULL, p3, nrow=2, ncol=2, common.legend=TRUE,
+                  labels=c("2017-18", "2021-22", NA, "Simulated differences"))
+```
+
+## Alternative Formulation
+
+I began thinking about the problem in terms of the main counterfactual question we seek to answer. While the interaction effect captures the product of two co-circulating pathogens, it makes interpreting the parameters of the model difficult--the effect of `cocirc` suggests only a modest impact of co-circulation, but this effect is in isolation of single pathogen circulation (which must both be present to observe any co-circulation).
+
+```{r}
+# relatively involved data preparation
+wpp[, resp_season:=fcase(
+  round < as.IDate("2017-07-01"), "2016-17",
+  round < as.IDate("2018-07-01"), "2017-18",
+  round < as.IDate("2019-07-01"), "2018-19",
+  round < as.IDate("2020-07-01"), "2019-20",
+  round < as.IDate("2021-07-01"), "2020-21",
+  round < as.IDate("2022-07-01"), "2021-22",
+  round < as.IDate("2023-07-01"), "2022-23",
+  round < as.IDate("2024-07-01"), "2023-24",
+  default="2024-25")]
+peaks <- wpp[, .(peak_hmpv=max(hmpv / tested), peak_rsv=max(rsv / tested)),
+             by=resp_season]
+# weekly circulation indicators (WCI)
+wci <- merge(wpp, peaks)
+wci[, hmpvc:=fcase(
+  (hmpv / tested) > 0.02 & lag(hmpv / tested) > 0.02, 1, ## 2-consecutive 2% weeks
+  (hmpv / tested) > (0.5 * peak_hmpv), 1, ## circulation is >50% of seasonal peak
+  default=0)]
+wci[, rsvc:=fcase(
+  (rsv / tested) > 0.05 & lag(rsv / tested) > 0.05, 1, ## 2-consecutive 5% weeks
+  (rsv / tested) > (0.1 * peak_rsv), 1, ## circulation is >10% of seasonal peak
+  default=0)]
+# define categorical predictor for circulation "state"
+wci[, circ_state:=fcase(
+  rsvc==1 & hmpvc==1, "both",
+  rsvc==0 & hmpvc==0, "neither",
+  default="single")]
+wci[, circ_state:=factor(circ_state, c("single", "neither", "both"))]
+```
+
+### Re-estimation
+
+```{r}
+#| output: false
+# estimate frequentist model
+fit.freq2 <- glm(codetected ~ circ_state, offset=log(tested),
+                 data=wci, family=poisson)
+# estimate Bayesian version
+fit.bayes2 <- stan_glm(
+  codetected ~ circ_state, offset=log(tested),
+  data=wci, family=poisson,
+  prior=normal(0, 2.5),
+  prior_intercept=normal(-0.75, 1),
+  seed=2024)
+```
+
+Here is a summary of the posterior draws, indicating the uncertainty of the parameter distributions.
+
+```{r}
+mcmc_areas(fit.bayes2, pars=c("neither", "both"))
+```

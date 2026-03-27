@@ -12,5 +12,8 @@ Proposal date: 3/26/2026
 # Action Items
 
 [ ] conduct preliminary analyses to review with Anna by 4/2
-[ ] submit revised data request to Leah Goldstein after one-pager approval
+[ ] submit revised data request to Leah Goldstein after one-pager approval:
+  - all data thru 2024-25 season
+  - variable for ECMO
+  - variables for CPAP/BIPAP or Nasal Canula
 [ ] identify 'pain points' and draft methodology for R21 submitted in Oct '26
