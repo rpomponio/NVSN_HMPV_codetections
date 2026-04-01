@@ -1,53 +1,5 @@
----
-title: "HMPV Co-detections Epi Curves Analysis"
-subtitle: "Does the level of co-circulation correlate with the relative number of observed co-detections?"
-author: "Ray Pomponio"
-date: today
-output-file: "Epi Curves Analysis Mar 2026.html"
-format:
-  html:
-    embed-resources: true
-execute:
-  echo: false
-  warning: false
-fig-cap-location: margin
----
 
-```{r}
-library(data.table)
-library(rstanarm)
-library(ggplot2)
-library(bayesplot)
-theme_set(bayesplot::theme_default())
-```
-## Data Preparation
 
-```{r}
-# load data from CDC; perform superficial clean-up
-cdc <- fread("Data/Pitt_Anna_HMPV_DEC25.csv")
-dat <- cdc[research_tested==1]
-dat[is.na(respvisitdt), respvisitdt:=as.IDate(as.Date(scrdate, format="%m/%d/%Y"))]
-dat[tmpv>=2, tmpv:=NA]
-dat[c_rsv_result>=2, c_rsv_result:=NA]
-```
-
-```{r}
-# weekly percent positivity and co-detection counts
-wpp <- dat[, .(tested=.N, hmpv=sum(tmpv, na.rm=T),
-               rsv=sum(c_rsv_result, na.rm=T),
-               codetected=sum(tmpv * c_rsv_result, na.rm=T)),
-           by=round(respvisitdt, "weeks")]
-```
-
-Below is a histogram of the outcome values:
-
-```{r}
-#| label: fig-outcome-histogram
-#| fig-cap: Histogram, Weekly co-detections of HMPV + RSV
-ggplot(wpp, aes(x=codetected)) +
-  geom_bar() +
-  labs(x="Weekly codetections", y="Frequency", subtitle=paste("N=", nrow(wpp)))
-```
 
 
 ## Review of Bayesian Setup
