@@ -130,13 +130,13 @@ p1 <- ggplot(wpp[order(round)], aes(x=round, y=hmpvr)) +
   geom_path(color="red") +
   geom_area(alpha=0.25, position="identity") +
   scale_y_continuous(limits=c(0, 0.6), breaks=seq(0, 0.6, 0.15), labels=seq(0, 60, 15)) +
-  labs(x="Surveillance month", y="% Positivity")
+  labs(x="Surveillance week", y="% Positivity")
 
 p2 <- ggplot(wpp[order(round)], aes(x=round, y=rsvr)) +
   geom_path(color="blue") +
   geom_area(alpha=0.25, position="identity") +
   scale_y_continuous(limits=c(0, 0.6), breaks=seq(0, 0.6, 0.15), labels=seq(0, 60, 15)) +
-  labs(x="Surveillance month", y="% Positivity")
+  labs(x="Surveillance week", y="% Positivity")
 
 ggarrange(p1, p2, labels=c("HMPV", "RSV"))
 ```
@@ -158,14 +158,14 @@ p1 <- ggplot(wpp[order(round)], aes(x=round, y=hmpvn)) +
   geom_area(alpha=0.25, position="identity") +
   scale_x_date(limits=c(as.IDate("2017-01-01"), as.IDate("2024-12-31"))) +
   scale_y_continuous(breaks=seq(0, 1, 0.25), labels=seq(0, 100, 25)) +
-  labs(x="Surveillance month", y="Normalized Positivity")
+  labs(x="Surveillance week", y="Normalized Positivity")
 
 p2 <- ggplot(wpp[order(round)], aes(x=round, y=rsvn)) +
   geom_path(color="blue") +
   geom_area(alpha=0.25, position="identity") +
   scale_x_date(limits=c(as.IDate("2017-01-01"), as.IDate("2024-12-31"))) +
   scale_y_continuous(breaks=seq(0, 1, 0.25), labels=seq(0, 100, 25)) +
-  labs(x="Surveillance month", y="Normalized % Positivity")
+  labs(x="Surveillance week", y="Normalized % Positivity")
 
 ggarrange(p1, p2, labels=c("HMPV", "RSV"))
 ```
@@ -174,24 +174,30 @@ Now for curve-product derivation:
 
 1) Take the product of the normalized curves in fig-side-by-side2.
 2) Plot the weekly product throughout the study period; this represents co-circulation patterns.
-3) Overlay the number of co-detections to assess temporal association.
+3) Take the proportion of HMPV detections that were co-detected for the pathogen of interest.
+4) Overlay the percentage of co-detections to assess temporal association.
 
 ```{r}
 #| label: fig-curve-prod-overlay
-#| fig-cap: "Overlaid co-detections on co-circulation patterns."
-wpp[, prodn:=100 * hmpvn * rsvn]
+#| fig-cap: "Overlaid monthly co-detections on weekly co-circulation patterns."
+wpp[, prodn:=hmpvn * rsvn]
+mpc <- dat[!is.na(tmpv),
+    .(hmpv=sum(tmpv, na.rm=TRUE),
+      codetected=sum(tmpv * c_rsv_result, na.rm=TRUE)),
+    by=.(round(respvisitdt, "months") + 14)]
+mpc[, codetectedn:=codetected / hmpv]
 ggplot(wpp[order(round)], aes(x=round, y=prodn)) +
   geom_path(color="purple", alpha=0.5) +
   geom_area(alpha=0.25, position="identity") +
-  geom_col(
-    data=bmo2[codetected=="RSV"],
-    aes(x=round + 14, y=N)) +
+  geom_col(data=mpc, aes(x=round, y=codetectedn)) +
   scale_x_date(limits=c(as.IDate("2017-01-01"), as.IDate("2024-12-31"))) +
   scale_y_continuous(
-    breaks=seq(0, 50, 10),
+    breaks=seq(0, 0.5, 0.1), labels=seq(0, 50, 10),
     limits=c(0, max(wpp$prodn, na.rm=TRUE))) +
-  labs(x="Surveillance month", y="Product of normalized %s")
+  labs(x="Surveillance period", y="Product of normalized %s")
 ```
+
+> I asked if we could then plot the magnitudes of the product curve peaks over time to describe pos vs. negative trend... compare that plot with a separate plot of observed co-detections (% of HMPV cases that are co-detections?) over time to simply ask whether these ines look similar or not.
 
 ## Summary Tables
 
@@ -237,8 +243,6 @@ Co-circulation of HMPV and RSV was apparent in all seasons, but most prominent i
 Co-detection of rhino/enterovirus was relatively common (12% overall), followed by co-detection of adenovirus (5% overall). Most viruses other than RSV were consistently co-detected before versus after the pandemic.
 
 ### Next Steps
-
-> I asked if we could then plot the magnitudes of the product curve peaks over time to describe pos vs. negative trend... compare that plot with a separate plot of observed co-detections (% of HMPV cases that are co-detections?) over time to simply ask whether these ines look similar or not.
 
 > Interestingly, she also thought it would be reasonable to take the area under the minimum curve and compare the two methods since I'm not totally sure whether meaningful co-circulation is truly bounded by whichever virus' minimum... it would require establishing thresholds and a Fourier transform to smooth the curve.
 
