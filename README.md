@@ -15,7 +15,7 @@ Proposal date: 3/26/2026
   - identify reasons for excluded specimens (not tested/never collected)
   - ellaborate on clinical vs. research swab source
   - examine un-normalized curves for co-detection vs. co-circulation
-- [ ] submit revised data request to Leah Goldstein after one-pager approval:
+- [x] submit revised data request to Leah Goldstein after one-pager approval:
   - all data thru 2024-25 season
   - variable for ECMO
   - variables for CPAP/BIPAP or Nasal Canula
