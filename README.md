@@ -11,7 +11,7 @@ Proposal date: 3/26/2026
 
 # Action Items
 
-- [ ] conduct preliminary analyses to review 5/7:
+- [x] conduct preliminary analyses to review 5/7:
   - identify reasons for excluded specimens (not tested/never collected)
   - ellaborate on clinical vs. research swab source
   - examine un-normalized curves for co-detection vs. co-circulation
