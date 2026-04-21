@@ -1,0 +1,64 @@
+---
+title: "HMPV Co-detections Comprehensive Analysis"
+author: "Ray Pomponio"
+date: today
+output-file: "Comprehensive Analysis Apr 2026.html"
+format:
+  html:
+    embed-resources: true
+    df-print: paged
+execute:
+  echo: false
+  warning: false
+fig-cap-location: top
+abstract-title: "Summary of findings"
+abstract: |
+  Co-detections of RSV and HMPV were relatively rare, occurring in <3% of HMPV-positive cases. Co-circulation of RSV and HMPV, as measured by percent positivity in ARI-eligible children, appears to have declined following the pandemic (Mar 1, 2020-Jan 1, 2021), with a proxy of co-circulation peaking at roughly half the magnitude of its pre-pandemic levels. The change in co-circulation patterns may be explained by shifts in the phases of the two Epi curvers, with HMPV percent positivity peaking later relative to RSV in the post-pandemic era. One limitation of this dataset is the inability to pinpoint individual pathogens as the driver of ARI symptoms; while circulation in the entire population may be approximated by ARI  percent positivity, the approach is not without its systematic biases.
+---
+
+```{r}
+library(data.table)
+library(consort)
+library(grid)
+library(gtsummary)
+library(ggplot2)
+library(ggpubr)
+set_consort_defaults(txt_gp=gpar(cex=0.6), parse_markup=TRUE)
+theme_set(theme_pubclean(base_size=18))
+```
+
+```{r}
+# load data from CDC; perform clean-up on dates and sites
+cdc <- fread("Data/Pitt_Anna_HMPV_DEC25.csv")
+cdc[, c_ariyear:=factor(
+  c_ariyear,
+  c(1:9),
+  c("2015-16", "2016-17", "2017-18", "2018-19", "2019-20", "2020-21",
+    "2021-22", "2022-23", "2023-24"))]
+cdc[, studysite:=factor(
+  studysite,
+  c(1:6, 8),
+  c("Vanderbilt", "Rochester", "Cincinnati",  "Seattle", "Houston",
+    "Kansas City", "Pittsburgh"))]
+dat <- cdc[research_tested==1]
+dat[is.na(respvisitdt), respvisitdt:=as.IDate(as.Date(scrdate, format="%m/%d/%Y"))]
+dat[tmpv>=2, c_mpv_result:=NA]
+dat[c_rsv_result>=2, c_rsv_result:=NA]
+```
+
+```{r}
+#| label: fig-consort-plot1
+#| fig-cap: "Study inclusion diagram"
+#| echo: false
+cdc[is.na(Caseid), rem:="Missing case ID"]
+cdc[research_tested!=1, exc:="Sample not tested"]
+out <- consort_plot(
+  cdc,
+  order=c(Caseid="CDC Case Count", rem="Invalid Case ID",
+          studysite="Site Enrollments",
+          exc="**Excluded**", Caseid="Analyzable Cases"),
+  side_box=c("rem", "exc"),
+  allocation="studysite")
+plot(out, grViz=TRUE)
+```
+
