@@ -8,13 +8,16 @@ format:
     embed-resources: true
     df-print: paged
 execute:
-  echo: false
+  message: false
   warning: false
 fig-cap-location: top
-abstract-title: "Summary of findings"
-abstract: |
-  Co-detections of RSV and HMPV were relatively rare, occurring in <3% of HMPV-positive cases. Co-circulation of RSV and HMPV, as measured by percent positivity in ARI-eligible children, appears to have declined following the pandemic (Mar 1, 2020-Jan 1, 2021), with a proxy of co-circulation peaking at roughly half the magnitude of its pre-pandemic levels. The change in co-circulation patterns may be explained by shifts in the phases of the two Epi curvers, with HMPV percent positivity peaking later relative to RSV in the post-pandemic era. One limitation of this dataset is the inability to pinpoint individual pathogens as the driver of ARI symptoms; while circulation in the entire population may be approximated by ARI  percent positivity, the approach is not without its systematic biases.
 ---
+
+# Analytical Workflow
+
+## Setup
+
+Loading various `R` packages and setting plotting parameters...
 
 ```{r}
 library(data.table)
@@ -23,34 +26,39 @@ library(grid)
 library(gtsummary)
 library(ggplot2)
 library(ggpubr)
+library(ggupset)
 set_consort_defaults(txt_gp=gpar(cex=0.6), parse_markup=TRUE)
-theme_set(theme_pubclean(base_size=18))
+theme_set(theme_pubclean(base_size=14))
 ```
+
+The following code reads the latest dataset as of April 2026:
 
 ```{r}
 # load data from CDC; perform clean-up on dates and sites
-cdc <- fread("Data/Pitt_Anna_HMPV_DEC25.csv")
+cdc <- fread("Data/Pitt_Anna_HMPV_APR26.csv")
 cdc[, c_ariyear:=factor(
   c_ariyear,
-  c(1:9),
+  c(1:10),
   c("2015-16", "2016-17", "2017-18", "2018-19", "2019-20", "2020-21",
-    "2021-22", "2022-23", "2023-24"))]
+    "2021-22", "2022-23", "2023-24", "2024-25"))]
 cdc[, studysite:=factor(
   studysite,
   c(1:6, 8),
   c("Vanderbilt", "Rochester", "Cincinnati",  "Seattle", "Houston",
     "Kansas City", "Pittsburgh"))]
-dat <- cdc[research_tested==1]
+dat <- cdc[research_tested==1 & !is.na(c_finalstatus)]
 dat[is.na(respvisitdt), respvisitdt:=as.IDate(as.Date(scrdate, format="%m/%d/%Y"))]
-dat[tmpv>=2, c_mpv_result:=NA]
-dat[c_rsv_result>=2, c_rsv_result:=NA]
 ```
+
+## Inclusion/Exclusion Criteria
+
+The only inclusion criteria is to have available research testing and determinable "final status," based on a 10-day chart review. Incidentally, not all cases were tested using the research panel. The following CONSORT figure describes inclusion/exclusion into this analysis, by site:
 
 ```{r}
 #| label: fig-consort-plot1
 #| fig-cap: "Study inclusion diagram"
 #| echo: false
-cdc[is.na(Caseid), rem:="Missing case ID"]
+cdc[is.na(c_finalstatus), rem:="Final status undetermined"]
 cdc[research_tested!=1, exc:="Sample not tested"]
 out <- consort_plot(
   cdc,
@@ -60,5 +68,110 @@ out <- consort_plot(
   side_box=c("rem", "exc"),
   allocation="studysite")
 plot(out, grViz=TRUE)
+```
+
+## Derivation of Outcome
+
+Similar to our work in mBio (2026), we derive an ordinal outcome based on observable clinical events. For each outcome after Routine/ED discharge, events indicate escalating thresholds of "illess severity":
+
+1) Routine/ED Discharge
+2) Admitted to Hospital
+3) Admitted, Received Supplemental O2 (Nasal Canula, HFNC, CPAP/BIPAP)
+4) Admitted to ICU
+5) Intubated or Treated with Mechanical Ventilation or ECMO
+6) Died
+
+```{r}
+dat[, c_illsevnum:=fcase(
+  c_died==1, 6,
+  c_intubated==1, 5,
+  inptEcmo==1, 5,
+  inptICU==1, 4,
+  c_finalstatus==1 & c_respsup==1, 3,
+  c_finalstatus==1 & c_suppoxy==1, 3,
+  c_finalstatus==1 & c_blowby==1, 3,
+  c_finalstatus==1 & c_hfnc==1, 3,
+  c_finalstatus==1 & c_cpap==1, 3,
+  c_finalstatus==1, 2,
+  c_finalstatus>=2, 1)]
+dat[, c_severity:=factor(c_illsevnum, 1:6, c("1) Routine/ED Discharge",
+                                             "2) Admitted to Hospital",
+                                             "3) Admitted + SO2",
+                                             "4) Admitted to ICU",
+                                             "5) MV/ECMO", "6) Died"))]
+```
+
+The following plot demonstrates the overall distribution of severity levels over the period of enrollments:
+
+```{r}
+#| label: fig-outcome-seasonal
+#| fig-cap: "Distribution of ordinal outcome by season"
+#| echo: false
+severity.counts <- dat[, .N, by=.(c_ariyear, c_severity)]
+severity.counts[, perc:=N / sum(N), by=c_ariyear]
+ggplot(severity.counts, aes(x=as.integer(c_ariyear), y=perc, fill=c_severity)) +
+  geom_area(alpha=0.8, color="black", size=0.3) +
+  scale_fill_brewer(palette=8) +
+  geom_text(aes(label=format(100 * perc, digits=1)),
+            position=position_fill(0.5),
+            alpha=0.8, color="black", size=3.0) +
+  # scale_y_reverse(breaks=seq(0, 1, 0.25), labels=seq(100, 0, -25)) +
+  scale_y_continuous(breaks=seq(0, 1, 0.25), labels=seq(0, 100, 25)) +
+  scale_x_continuous(breaks=1:10,
+                     labels=levels(severity.counts$c_ariyear)) +
+  labs(x="Season", y="Marginal Percentage", fill="Ordinal Illness Severity")
+```
+
+Although our interest is in severity as captured by observable events, it is possible to demonstrate the relationship between our derived ordinal outcome and the more-traditional Length of Stay (LOS) outcome, which might be treated continuously and normally distributed:
+
+```{r}
+#| label: fig-outcome-los-comp
+#| fig-cap: "Relationship between ordinal outcome and log-transformed length of stay"
+#| echo: false
+dat[!is.na(c_los), c_los0:=c_los]
+dat[c_finalstatus>=2, c_los0:=0]
+ggplot(dat, aes(x=c_illsevnum, y=c_los0, color=c_severity)) +
+  geom_point(position=position_jitter(width=0.1, seed=1818)) +
+  geom_boxplot(alpha=0.8, outliers=FALSE) +
+  scale_color_brewer(palette=8) +
+  scale_x_continuous(breaks=1:6, labels=paste("Level", 1:6)) +
+  scale_y_continuous(transform="pseudo_log") +
+  labs(x="Ordinal Illness Severity", y="Length of Stay (days)", color="Legend")
+```
+
+@fig-outcome-los-comp makes clear the asssumption of normally distributed lengths of stay is violated; it is arguable whether the variable is continuous or discrete. More concerning, the most-severe outcome (death) does not yield the highest typical length of stay. As a fix for these numerical issues, any use of LOS as an outcome should consider, at the very least, a log-transformation.
+
+## Derivation of Exposure
+
+We next derive a set of exposures based on laboratory-confirmed detections; these exposures are the viral pathogens, in which any combination is theoretically possible. 
+
+```{r}
+dat[, c_mpv_result:=fcase(tmpv==1, 1, default=0)]
+dat[, c_rsv_result:=fcase(c_rsv_result==1, 1, default=0)]
+dat[, c_adeno_result:=fcase(tAdeno==1, 1, default=0)]
+dat[, c_flu_result:=fcase(anyflu_result==1, 1, default=0)]
+dat[, c_piv_result:=fcase(piv14_pos==1, 1, default=0)]
+dat[, c_rhino_result:=fcase(rhent_pos==1, 1, default=0)]
+lab.paths <- c(MPV="c_mpv_result", RSV="c_rsv_result", Adeno="c_adeno_result",
+               Flu="c_flu_result", PIV="c_piv_result", Rhino="c_rhino_result")
+custom_fun <- function(results) {
+  # returns list of pathogens detected
+  names(lab.paths)[results==1]
+}
+dat[, lst_detections:=apply(.SD, 1, custom_fun), .SDcols=unname(lab.paths)]
+```
+
+We examine the most common co-detections involving human metapneumovirus:
+
+```{r}
+#| label: fig-exposure-upset
+#| fig-cap: "Most common co-detection patterns involving HMPV-positive cases"
+#| echo: false
+ggplot(dat[tmpv==1], aes(x=lst_detections)) +
+  geom_bar() +
+  scale_x_upset(n_intersections=15) +
+  geom_text(stat="count", aes(label=after_stat(count)), vjust=-1) +
+  scale_y_continuous(breaks=NULL, lim=c(0, 5000), name="") +
+  labs(x="Co-detections with HMPV")
 ```
 
