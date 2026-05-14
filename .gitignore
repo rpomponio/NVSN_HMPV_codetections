@@ -3,4 +3,5 @@
 .RData
 .Ruserdata
 Data/*.csv
+Archive/*
 *.html

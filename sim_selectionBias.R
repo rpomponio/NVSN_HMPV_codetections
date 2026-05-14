@@ -10,7 +10,7 @@ library(data.table)
 library(ordinal)
 set.seed(1818)
 
-# HARDCODED PARAMETERS WHERE RSV IS MORE-VIRULENT AGENT
+# HARDCODED PARAMETERS WHERE RSV IS THE MORE VIRULENT AGENT
 N.REP <- 1000
 RSV.PARAMS <- c("mu"=60, "sigma"=10)
 MPV.PARAMS <- c("mu"=40, "sigma"=15)
@@ -24,7 +24,7 @@ sim <- replicate(
                       MPV=rbinom(10000, size=1, prob=0.2))
     dat[, codetect:=as.integer(RSV * MPV)]
     
-    # virulence determined by agent, if co-detected then max virulence used
+    # virulence determined by one agent, if co-detected then max virulence used
     dat[RSV==1, virulence:=rnorm(
       sum(RSV==1), mean=RSV.PARAMS["mu"], sd=RSV.PARAMS["sigma"])]
     dat[MPV==1, virulence:=rnorm(
