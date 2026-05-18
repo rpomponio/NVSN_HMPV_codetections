@@ -1,0 +1,17 @@
+---
+title: "HMPV Illness Severity and Co-detections: NVSN 2015–2026"
+subtitle: "Replication of Amarin et al. (2026) Framework Applied to HMPV"
+author: "Ray Pomponio / Anna Wang-Erickson"
+date: today
+output-file: "Replication Analysis May 2026.html"
+format:
+  html:
+    embed-resources: true
+    df-print: paged
+    toc: true
+    toc-depth: 3
+execute:
+  message: false
+  warning: false
+fig-cap-location: top
+---
