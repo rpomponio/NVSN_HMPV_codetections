@@ -15,3 +15,221 @@ execute:
   warning: false
 fig-cap-location: top
 ---
+
+# Overview
+
+This document replicates, as closely as the NVSN dataset permits, the analytical
+approach of Amarin et al. (2026) for RSV, applied here to **human metapneumovirus
+(HMPV)** as the pathogen of interest.
+
+ The target outputs are:
+
+- A flow diagram of study participants among ARI-enrolled medical encounters
+- **Table 1**: Baseline characteristics and outcomes of HMPV-positive cases,
+  stratified by co-detection status 
+
+---
+
+# Setup
+
+```{r setup}
+library(data.table)
+library(consort)
+library(grid)
+library(gtsummary)
+library(ggplot2)
+library(ggpubr)
+library(ggupset)
+
+set_consort_defaults(txt_gp=gpar(cex=0.6), parse_markup=TRUE)
+theme_set(theme_pubclean(base_size=14))
+```
+
+
+# Data Loading and Cleaning
+
+```{r load-data}
+# ── Load CSV (update path as needed) ──────────────────────────────────────────
+cdc <- fread("Data/Pitt_Anna_HMPV_APR26.csv")
+
+# ── ARI season labels (11 seasons, 2015-16 through 2025-26) ──────────────────
+cdc[, c_ariyear := factor(
+  c_ariyear,
+  levels = 1:11,
+  labels = c("2015-16", "2016-17", "2017-18", "2018-19", "2019-20",
+             "2020-21", "2021-22", "2022-23", "2023-24", "2024-25", "2025-26")
+)]
+
+# ── Site labels ───────────────────────────────────────────────────────────────
+cdc[, studysite := factor(
+  studysite,
+  levels = c(1:6, 8),
+  labels = c("Vanderbilt", "Rochester", "Cincinnati", "Seattle",
+             "Houston", "Kansas City", "Pittsburgh")
+)]
+
+# ── Sex labels ────────────────────────────────────────────────────────────────
+cdc[, sexch := factor(sexch, levels = c(1, 2), labels = c("Male", "Female"))]
+
+# ── Insurance labels ──────────────────────────────────────────────────────────
+cdc[, scrinsurance := factor(
+  scrinsurance,
+  levels = c(1, 2, 3, 4),
+  labels = c("Public", "Private", "Both", "None/Self-Pay"))]
+
+# ── Race/ethnicity (use c_race_int2 for finer granularity) ───────────────────
+cdc[, c_race_int2 := factor(
+  c_race_int2,
+  levels = 1:7,
+  labels = c("White NH", "Black NH", "Hispanic", "NH Pacific Islander",
+             "AI/AN NH", "Asian NH", "Multiple/Other NH"))]
+
+# ── Coerce binary flags to integer 0/1 (some may arrive as character) ─────────
+binary.vars <- c("c_xunderlying", "c_uresp", "c_unuerologic", "c_uoncolimmu",
+                 "c_ucardiovasc", "c_premature",
+                 "c_respsup", "c_suppoxy", "inptICU", "inptEcmo",
+                 "c_blowby", "c_hfnc", "c_cpap", "c_intubated", "c_died",
+                 "ANYpneumDx", "ANYbronchDx", "ANYasthDx", "ANYuriDx",
+                 "ANYrespfailDx")
+cdc[, (binary.vars) := lapply(.SD, function(x) as.integer(as.character(x))),
+    .SDcols = binary.vars]
+
+# ── Backfill specimen date from screen date where missing ─────────────────────
+cdc[is.na(respvisitdt),
+    respvisitdt := as.IDate(as.Date(scrdate, format = "%m/%d/%Y"))]
+```
+
+---
+
+# Inclusion / Exclusion
+
+```{r}
+#| label: fig-consort
+#| fig-cap: "Flow diagram of study participants"
+#| echo: false
+
+cdc[, exc:=fcase(
+  research_tested!=1, "Sample not research-tested",
+  tmpv==8, "Sample not research-tested for HMPV",
+  is.na(c_finalstatus), "Final status undetermined")]
+cdc[, rem:=fcase(
+  tmpv==0, "HMPV Negative",
+  tmpv==2, "HMPV Inconclusive")]
+cdc[, codetect:=fcase(
+  c_othercoin6==1, "At least 1 other virus detected",
+  default="No other virus was detected")]
+cdc[c_othercoin6==1, codetectn:=rowSums(.SD==1),
+  .SDcols=c("tAdeno", "anyflu_result", "piv14_pos", "c_rsv_result", "rhent_pos")]
+cdc[codetectn > 1, more:="More than 1 other virus detected"]
+
+out <- consort_plot(
+  cdc,
+  order = c(Caseid    = "Enrolled from outpatient, emergency, or inpatient",
+            exc       = "**Excluded**",
+            Caseid    = "Tested for human metapneumovirus",
+            rem       = "**Undetected**",
+            Caseid    = "Human metapneumovirus detected by research testing",
+            codetect  = "",
+            more      = "",
+            Caseid    = "Analyzed"),
+  side_box   = c("rem", "exc", "more"),
+  allocation = "codetect")
+plot(out, grViz = TRUE)
+
+# ── Analytic cohort: singly-detected HMPV cases or single co-detections ───────
+dat <- cdc[is.na(exc) & is.na(rem) & (c_othercoin6==0 | is.na(more))]
+```
+
+---
+
+# Table 1: Characteristics of HMPV-Positive Cases
+
+Stratified by co-detection status.
+
+```{r}
+#| label: tbl-table1
+#| tbl-cap: "Demographic and clinical characteristics of HMPV-positive cases by co-detection status"
+
+dat[, codetect_status:=fcase(
+  tAdeno==1, "HMPV/Adeno",
+  anyflu_result==1, "HMPV/Flu",
+  piv14_pos==1, "HMPV/PIV",
+  c_rsv_result==1, "HMPV/RSV",
+  rhent_pos==1, "HMPV/HRV",
+  default="HMPV Only")]
+dat[, hospital_status:=fcase(
+  c_finalstatus==1, "Hospitalized",
+  default="Not Hospitalized")]
+
+tbl1.vars <- c(
+  # Demographics
+  "c_agemonths", "sexch", "c_race_int2", "scrinsurance", "studysite",
+  # Comorbidities
+  "c_xunderlying", "c_uresp", "c_ucardiovasc", "c_unuerologic",
+  "c_uoncolimmu", "c_premature",
+  # Severity
+  "hospital_status", "c_los", "inptICU", "c_suppoxy", "c_intubated")
+
+tbl1 <- tbl_summary(
+  dat,
+  by       = codetect_status,
+  include  = all_of(tbl1.vars),
+  label    = list(
+      c_agemonths     ~ "Age in months, median (IQR)",
+      sexch           ~ "Sex",
+      c_race_int2     ~ "Race / Ethnicity",
+      scrinsurance    ~ "Insurance Type",
+      studysite       ~ "Study Site",
+      c_xunderlying   ~ "≥1 Underlying Condition",
+      c_uresp         ~ "Respiratory Condition",
+      c_ucardiovasc   ~ "Cardiovascular Condition",
+      c_unuerologic   ~ "Neuromuscular Condition",
+      c_uoncolimmu    ~ "Oncologic/Immunosuppressive Condition",
+      c_premature     ~ "Prematurity (<37 wks)",
+      hospital_status ~ "Final Status",
+      c_los           ~ "Length of stay in days, median (IQR)",
+      inptICU         ~ "ICU Admission",
+      c_suppoxy       ~ "Supplemental Oxygen",
+      c_intubated     ~ "Intubation"),
+    missing  = "ifany",
+    statistic = list(
+      all_continuous()  ~ "{median} ({p25}, {p75})",
+      all_categorical() ~ "{n} ({p}%)")) |>
+  bold_labels() |>
+  remove_footnote_header() |>
+  modify_caption("Demographic and clinical characteristics of HMPV-positive cases by co-detection status")
+
+tbl1
+```
+
+
+---
+
+# Notes and Caveats
+
+- **Scope**: This document replicates the descriptive and tabular framework of
+  Amarin et al. (2026) only. Regression modeling, subgroup analyses, and
+  journal-club extensions are intentionally excluded at this stage.
+
+- **c_respsup / c_blowby / c_hfnc / c_cpap** are only available for
+  `c_ariyear ≥ 8` (2022-23 onward). For earlier seasons, supplemental-O2
+  classification in Severity Level 3 relies on `c_suppoxy` alone. This
+  introduces a potential under-ascertainment of Level 3 in earlier seasons;
+  consider flagging this in any manuscript methods section.
+
+- **Race/ethnicity**: Two variables are available (`c_race_int` and
+  `c_race_int2`). The finer-grained `c_race_int2` is used here. Confirm with
+  PI whether this is the preferred variable.
+
+- **HMPV season year 11 (2025-26)** is ongoing as of the data pull date
+  (Apr 2026). Consider censoring or labeling partial-season data accordingly.
+
+- Human Coronavirus **(HCoV)** results were withheld from this dataset for unknown
+  reasons. **Daycare attendance** and **Smoking exposure** were also withheld.
+
+- **Co-detection flags**: `c_othercoin6` (pre-derived HMPV
+  co-detection indicator) used as a flag for all co-detections above.
+
+---
+
+*Generated with Quarto. Contact Ray Pomponio / Anna Wang-Erickson for questions.*
