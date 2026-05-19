@@ -20,20 +20,41 @@ fig-cap-location: top
 
 # Overview
 
-This document replicates, as closely as the NVSN dataset permits, the analytical
-approach of Amarin et al. (2026) for RSV, applied here to **human metapneumovirus
-(HMPV)** as the pathogen of interest.
+This document closely follows the analytical approach of Amarin et al. (2026),
+who studied the clinical impact of viral co-detections in children with
+respiratory syncytial virus (RSV). We apply the same framework here to
+**human metapneumovirus (HMPV)** as the pathogen of interest, using data from
+the New Vaccine Surveillance Network (NVSN) spanning the 2015–16 through
+2025–26 surveillance seasons.
 
- The target outputs are:
+**Reference:** Amarin JZ, Shaikha AA, Bunsow LI, et al. Respiratory Syncytial
+Virus Co-Detection With Other Respiratory Viruses Is Not Significantly
+Associated With Worse Clinical Outcomes Among Children Aged <2 Years.
+*Open Forum Infectious Diseases*. 2026.
+
+The target outputs are:
 
 - A flow diagram of study participants among ARI-enrolled medical encounters
 - A table of baseline characteristics and outcomes of HMPV-positive cases,
   stratified by co-detection status
 - An UpSet plot of the most common co-detection patterns among HMPV-positives
+- A regression summary of adjusted odds ratios of hospital admission status,
+  grouped by co-detection status
 
 ---
 
 # Setup
+
+The following packages are required to run this analysis. Each serves a
+distinct purpose:
+
+- **`data.table`**: fast data manipulation for large surveillance datasets
+- **`consort`**: draws the participant flow (CONSORT-style) diagram
+- **`grid`**: low-level graphics support used internally by `consort`
+- **`gtsummary`**: produces publication-ready summary tables
+- **`ggplot2`** and **`ggpubr`**: general-purpose plotting
+- **`ggupset`**: extends `ggplot2` to render UpSet plots, which visualize
+  combinations of categorical attributes (here, which viruses were co-detected)
 
 ```{r setup}
 library(data.table)
@@ -48,18 +69,38 @@ set_consort_defaults(txt_gp=gpar(cex=0.6), parse_markup=TRUE)
 theme_set(theme_pubclean(base_size=14))
 ```
 
+---
 
 # Data Loading and Cleaning
+
+The raw dataset is a CSV file extracted from the NVSN surveillance system.
+Before any analysis, several housekeeping steps are required:
+
+1. **Derive hospitalization status** — a simple binary flag (hospitalized vs.
+   not) that will serve both as a grouping variable in Table 1 and as the
+   outcome in the logistic regression.
+2. **Apply human-readable labels** to coded categorical variables (season,
+   site, sex, insurance, race/ethnicity), so that all tables and figures are
+   self-explanatory without reference to a separate data dictionary.
+3. **Coerce binary (0/1) clinical flags** to integer type, correcting for
+   the occasional character-type import that would otherwise cause errors
+   downstream.
+4. **Backfill missing specimen dates** from the screen date, to enable any
+   time-series figures that require a valid visit date.
 
 ```{r load-data}
 # ── Load CSV (update path as needed) ──────────────────────────────────────────
 cdc <- fread("Data/Pitt_Anna_HMPV_APR26.csv")
 
+# ── Derive binary hospitalization flag from the "highest level of care" field ─
+#    c_finalstatus == 1 means the patient was admitted as an inpatient;
+#    all other values (ED, outpatient, urgent care) are grouped as "Not Hospitalized"
 cdc[, hospital_status:=fcase(
   c_finalstatus==1, "Hospitalized",
   default="Not Hospitalized")]
 
 # ── ARI season labels (11 seasons, 2015-16 through 2025-26) ──────────────────
+#    c_ariyear is stored as an integer 1–11; we convert to a descriptive factor
 cdc[, c_ariyear := factor(
   c_ariyear,
   levels = 1:11,
@@ -68,6 +109,8 @@ cdc[, c_ariyear := factor(
 )]
 
 # ── Site labels ───────────────────────────────────────────────────────────────
+#    studysite is stored as an integer; note that site code 7 is not used,
+#    and Pittsburgh is coded as 8
 cdc[, studysite := factor(
   studysite,
   levels = c(1:6, 8),
@@ -76,22 +119,32 @@ cdc[, studysite := factor(
 )]
 
 # ── Sex labels ────────────────────────────────────────────────────────────────
+#    Only codes 1 (Male) and 2 (Female) are retained; unknown/missing dropped
 cdc[, sexch := factor(sexch, levels = c(1, 2), labels = c("Male", "Female"))]
 
 # ── Insurance labels ──────────────────────────────────────────────────────────
+#    Code 8 (Unknown) is excluded here; unknown cases will appear as missing
+#    in the summary table
 cdc[, scrinsurance := factor(
   scrinsurance,
   levels = c(1, 2, 3, 4),
   labels = c("Public", "Private", "Both", "None/Self-Pay"))]
 
-# ── Race/ethnicity (use c_race_int2 for finer granularity) ───────────────────
+# ── Race/ethnicity ────────────────────────────────────────────────────────────
+#    Using c_race_int2, the more granular of two available race/ethnicity
+#    variables (7 categories vs. 4). NH = Non-Hispanic; AI/AN = American
+#    Indian / Alaska Native. Code 8 (Unknown) is excluded and will appear
+#    as missing in the table.
 cdc[, c_race_int2 := factor(
   c_race_int2,
   levels = 1:7,
   labels = c("White NH", "Black NH", "Hispanic", "NH Pacific Islander",
              "AI/AN NH", "Asian NH", "Multiple/Other NH"))]
 
-# ── Coerce binary flags to integer 0/1 (some may arrive as character) ─────────
+# ── Coerce binary clinical flags to integer 0/1 ───────────────────────────────
+#    These variables represent yes/no clinical events (e.g., ICU admission,
+#    intubation). They may import as character strings, so we explicitly
+#    convert them to integer to avoid errors in table summaries and models.
 binary.vars <- c("c_xunderlying", "c_uresp", "c_unuerologic", "c_uoncolimmu",
                  "c_ucardiovasc", "c_premature",
                  "c_respsup", "c_suppoxy", "inptICU", "inptEcmo",
@@ -102,35 +155,66 @@ cdc[, (binary.vars) := lapply(.SD, function(x) as.integer(as.character(x))),
     .SDcols = binary.vars]
 
 # ── Backfill specimen date from screen date where missing ─────────────────────
+#    respvisitdt is the date the respiratory specimen was collected. Where it
+#    is missing, we substitute the screening date (scrdate) as a reasonable
+#    approximation of the visit date.
 cdc[is.na(respvisitdt),
     respvisitdt := as.IDate(as.Date(scrdate, format = "%m/%d/%Y"))]
 ```
 
 ---
 
-# Inclusion / Exclusion
+# Inclusion and Exclusion of Participants
+
+Not every enrolled encounter is eligible for this analysis. The flow diagram
+below tracks cases from initial enrollment through to the final analytic cohort,
+making the reasons for exclusion explicit and auditable.
+
+There are three grounds for exclusion, applied in order:
+
+1. **No research testing** — the specimen was not tested using the research
+   multiplex panel, so HMPV status cannot be determined.
+2. **HMPV not tested** — the research panel was run, but the HMPV assay was
+   not performed (result code 8 = "not performed").
+3. **Final status undetermined** — the 10-day chart review needed to classify
+   the encounter's highest level of care could not be completed.
+
+After excluding these cases, HMPV-negative and inconclusive results are set
+aside (shown as "Undetected" in the diagram). Among confirmed HMPV-positive
+cases, those with **more than one co-detected virus** are dropped to keep
+co-detection groups mutually exclusive and directly comparable — the same
+restriction applied by Amarin et al. (2026). The remaining cases form the
+analytic cohort, split by whether any co-pathogen was detected alongside HMPV.
 
 ```{r}
 #| label: fig-consort
-#| fig-cap: "Flow diagram of study participants"
+#| fig-cap: "Flow diagram of study participants from ARI enrollment through the final analytic cohort. Cases are split at the bottom by co-detection status (HMPV alone vs. HMPV with one co-detected virus). Cases with more than one co-detected virus are dropped to maintain mutually exclusive comparison groups, following Amarin et al. (2026)."
 #| fig-width: 8
 #| echo: false
 
+# ── Define exclusion reasons (applied before HMPV result is known) ────────────
 cdc[, exc:=fcase(
   research_tested!=1, "Sample not research-tested",
   tmpv==8, "Sample not research-tested for HMPV",
   is.na(c_finalstatus), "Final status undetermined")]
+
+# ── Among tested cases, flag those without a positive HMPV result ─────────────
 cdc[, rem:=fcase(
   tmpv==0, "HMPV Negative",
   tmpv==2, "HMPV Inconclusive")]
+
+# ── Among HMPV-positives, classify co-detection status ────────────────────────
 cdc[, codetect:=fcase(
   c_othercoin6==1, "At least 1 other virus detected",
   default="No other virus was detected")]
+
+# ── Count how many co-pathogens were detected (to identify multi-co-detections)
 cdc[c_othercoin6==1, codetectn:=rowSums(.SD==1),
   .SDcols=c("tAdeno", "c_rsv_result", "anyflu_result", "piv14_pos", "rhent_pos")]
 cdc[codetectn > 1, more:="More than 1 other virus detected"]
 
-# ── Analytic cohort: singly-detected HMPV cases or single co-detections ───────
+# ── Final analytic cohort: no exclusions, no ambiguous HMPV result,
+#    and at most one co-detected virus ─────────────────────────────────────────
 dat <- cdc[is.na(exc) & is.na(rem) & (c_othercoin6==0 | is.na(more))]
 
 consort_plot(
@@ -151,12 +235,32 @@ consort_plot(
 
 # Characteristics of HMPV-Positive Cases
 
-Stratified by co-detection status.
+The table below describes the baseline characteristics and clinical outcomes
+of all cases in the analytic cohort, stratified by co-detection status.
+Each column represents a distinct viral detection group: cases in which HMPV
+was the only virus detected, and cases in which HMPV was detected alongside
+one specific co-pathogen (adenovirus, influenza, parainfluenza [PIV],
+RSV, or rhinovirus/enterovirus [HRV]).
+
+**How to read this table:** For continuous variables (e.g., age in months),
+we report the median and interquartile range (IQR) — that is, the middle value
+and the range from the 25th to 75th percentile. For categorical variables
+(e.g., sex, insurance type), we report counts and column percentages. Rows
+labeled "Unknown" or missing indicate data that were not collected or could
+not be determined. The clinical outcome variables (length of stay, ICU
+admission, supplemental oxygen, intubation) are only meaningful for the
+subset of patients who were hospitalized; non-hospitalized cases contribute
+zeros or missing values to those rows, and this should be kept in mind when
+interpreting those figures.
 
 ```{r}
 #| label: tbl-table1
-#| tbl-cap: "Demographic and clinical characteristics of HMPV-positive cases by co-detection status"
+#| tbl-cap: "Baseline demographic characteristics and clinical outcomes of HMPV-positive cases, stratified by co-detection status. Co-detection groups are mutually exclusive (cases with more than one co-detected virus were excluded). Outcome variables (length of stay, ICU admission, supplemental oxygen, and intubation) are shown beneath Final Status and pertain only to hospitalized cases."
 
+# ── Derive the co-detection status grouping variable ─────────────────────────
+#    Priority is assigned in the order listed (Adeno first, HRV last), which
+#    is relevant only for multi-detection cases — but those have already been
+#    excluded, so this is effectively a simple lookup.
 dat[, codetect_status:=fcase(
   tAdeno==1, "HMPV/Adeno",
   anyflu_result==1, "HMPV/Flu",
@@ -165,13 +269,15 @@ dat[, codetect_status:=fcase(
   rhent_pos==1, "HMPV/HRV",
   default="HMPV Only")]
 
+# ── Variables to include in Table 1, in display order ────────────────────────
+#    Grouped conceptually: demographics, comorbidities, then clinical outcomes
 tbl1.vars <- c(
   # Demographics
   "c_agemonths", "sexch", "c_race_int2", "scrinsurance", "studysite",
   # Comorbidities
   "c_xunderlying", "c_uresp", "c_ucardiovasc", "c_unuerologic",
   "c_uoncolimmu", "c_premature",
-  # Severity
+  # Clinical outcomes (hospital_status first; inpatient-only outcomes follow)
   "hospital_status", "c_los", "inptICU", "c_suppoxy", "c_intubated")
 
 tbl1 <- tbl_summary(
@@ -209,11 +315,29 @@ tbl1
 
 # Co-detection Patterns
 
+The UpSet plot below visualizes how often HMPV was detected alone versus
+alongside each possible combination of the other five respiratory viruses
+tested in the research panel (RSV, adenovirus, influenza, parainfluenza,
+and rhinovirus/enterovirus). Each bar represents a unique combination of
+detected viruses; the dots and connecting lines below the bars indicate which
+viruses are included in that combination. Bars are colored by whether the
+patient was ultimately hospitalized, providing a first visual impression of
+whether certain co-detection patterns are associated with greater illness
+severity.
+
+Note that this figure is drawn from the **full HMPV-positive universe** (before
+the restriction to single co-detections), so all combinations — including those
+with two or more co-pathogens — are visible here. Only the top 15 most common
+combinations are shown.
+
 ```{r}
 #| label: fig-upset-hmpv
-#| fig-cap: "Most common co-detection patterns among HMPV-positive cases (top 15 combinations)"
+#| fig-cap: "Co-detection patterns among all HMPV-positive cases (research-tested), showing the 15 most frequent combinations of co-detected viruses. Bars are colored by hospitalization status. This figure is drawn before the restriction to single co-detections, so combinations involving multiple co-pathogens are included."
 #| echo: false
 
+# ── Named vector mapping display labels to raw column names ───────────────────
+#    This is used to translate the 0/1 columns into a list of pathogen names
+#    for each case, which is what the UpSet plot requires.
 lab.paths <- c(
   HMPV  = "tmpv",
   RSV   = "c_rsv_result",
@@ -222,7 +346,10 @@ lab.paths <- c(
   PIV   = "piv14_pos",
   Rhino = "rhent_pos")
 
-# ── List-column of detected pathogen names ─────────────────────────────────────
+# ── Build a list-column: for each case, which pathogens were detected? ─────────
+#    customFun receives a row of 0/1 values and returns the names of those
+#    that equal 1 (i.e., were detected). The result is stored as a list-column
+#    because the number of detected pathogens varies by case.
 customFun <- function(results) names(lab.paths)[results == 1]
 cdc[, lst_detections:=apply(.SD, 1, customFun), .SDcols=unname(lab.paths)]
 
@@ -240,26 +367,54 @@ ggplot(cdc[tmpv==1], aes(x=lst_detections, fill=hospital_status)) +
 
 # Admission Odds by Co-detection Status
 
-Adjusting for age at presentation (continuous), preterm birth (dichotomous), underlying medical conditions (dichotomous), and study site (categorical).
+To assess whether the presence of a viral co-pathogen alongside HMPV is
+independently associated with a higher likelihood of hospitalization, we
+fit a logistic regression model. The outcome is whether the patient was
+hospitalized (vs. discharged from the ED, outpatient clinic, or urgent care).
+
+The model adjusts for potential confounders that are known to influence
+illness severity and hospitalization risk in children with acute respiratory
+illness: **age** (in months, continuous), **preterm birth status**
+(dichotomous), **any underlying medical condition** (dichotomous), and
+**enrollment site** (categorical, to account for systematic differences in
+care practices across the seven NVSN hospitals). After adjusting for these
+factors, the remaining association between co-detection group and
+hospitalization is expressed as an **adjusted odds ratio (aOR)**.
+
+An aOR greater than 1 indicates that a particular co-detection group had
+higher odds of hospitalization compared to the reference group (HMPV Only),
+after accounting for age, prematurity, underlying conditions, and site.
+Confidence intervals and p-values are provided; results in bold meet the
+conventional p < 0.05 threshold for statistical significance.
 
 ```{r}
 #| label: tbl-table2
-#| tbl-cap: "Adjusted Odds Ratios of Hospitalization by co-detection status"
+#| tbl-cap: "Adjusted odds ratios (aOR) of hospitalization by viral co-detection status, from a logistic regression model adjusting for age in months, preterm birth, any underlying medical condition, and enrollment site. The reference group is HMPV Only. Only the co-detection term is shown; covariate coefficients are suppressed."
 
+# ── Fit the logistic regression model ─────────────────────────────────────────
+#    The outcome is a binary indicator of hospitalization derived from
+#    hospital_status. Covariates are entered on the right-hand side;
+#    codetect_status is the exposure of interest (reference = "HMPV Only").
 fit <- glm(hospital_status=="Hospitalized" ~ c_agemonths + c_premature +
              c_xunderlying + studysite + codetect_status,
            family=binomial,
            data=dat)
 
+# ── Summarize the model ────────────────────────────────────────────────────────
+#    exponentiate=TRUE converts log-odds coefficients to odds ratios.
+#    include=c(codetect_status) suppresses the display of covariate rows,
+#    showing only the co-detection term that is the focus of inference.
+#    add_n and add_nevent append the number of cases and hospitalized events
+#    per group, to aid interpretation.
 tbl2 <- tbl_regression(
   fit,
   exponentiate=TRUE,
   include=c(codetect_status),
   intercept=FALSE,
-  label=list(codetect_status ~ "Detection")) |>
+  label=list(codetect_status ~ NA)) |>
   add_n(location="level") |>
   add_nevent(location="level") |>
-  bold_labels() |>
+  modify_header(label ~ "**Detection**", stat_nevent ~ "**Admitted**") |>
   bold_p()
 tbl2
 ```
@@ -268,25 +423,49 @@ tbl2
 
 # Notes and Caveats
 
-- **Scope**: This document replicates the descriptive and tabular framework of
-  Amarin et al. (2026): *Respiratory Syncytial Virus Co-Detection With Other Respiratory Viruses Is Not Significantly Associated With Worse Clinical Outcomes Among Children Aged <2 Years*.
+## Comparison with Amarin et al. (2026)
 
-- **c_respsup / c_blowby / c_hfnc / c_cpap** are only available for
-  `c_ariyear ≥ 8` (2022-23 onward). For earlier seasons, supplemental-O2
-  classification in Severity Level 3 relies on `c_suppoxy` alone.
+This analysis replicates the design of Amarin et al. (2026), who examined
+whether viral co-detections were associated with worse clinical outcomes among
+children with laboratory-confirmed RSV. Their key methodological choices —
+restricting to single co-detections, adjusting for age and underlying
+conditions, and using hospitalization as the primary outcome — are preserved here.
 
-- **Race/ethnicity**: Two variables are available (`c_race_int` and
-  `c_race_int2`). The more-granular `c_race_int2` is used here.
+**The most important difference** between this analysis and Amarin et al. is
+the study population. Amarin et al. restricted their cohort to **children
+under 2 years of age**, a group with well-established vulnerability to RSV
+and the primary target of RSV prevention strategies. **The present analysis
+includes all enrolled ages** in the NVSN dataset and does not apply that
+age restriction. This means our results are not directly comparable to
+Amarin et al. on the basis of the outcome alone, and any interpretation of
+co-detection effects should be considered in the context of a broader and
+more heterogeneous age distribution.
 
-- **HMPV season year 11 (2025-26)** is ongoing as of the data pull date
-  (Apr 2026). Consider censoring or labeling partial-season data accordingly.
+## Additional Caveats
 
-- Human Coronavirus **(HCoV)** results were withheld from this dataset for unknown
-  reasons. **Daycare attendance** and **Smoking exposure** were also withheld.
+- **Respiratory support variables** (`c_respsup`, `c_blowby`, `c_hfnc`,
+  `c_cpap`) are only available for seasons 2022–23 onward (`c_ariyear ≥ 8`).
+  For earlier seasons, supplemental oxygen classification relies on `c_suppoxy`
+  alone, which may lead to under-ascertainment of oxygen support in those years.
 
-- **Co-detection flags**: `c_othercoin6` (pre-derived HMPV
-  co-detection indicator) used as a flag for all co-detections above.
+- **Race/ethnicity**: Two variables are available (`c_race_int` [4 categories]
+  and `c_race_int2` [7 categories]). The more granular `c_race_int2` is used
+  throughout.
+
+- **Season 11 (2025–26)** was ongoing at the time of the data pull (April 2026).
+  Cases from this partial season are included but should be interpreted
+  accordingly; seasonal-level summaries for 2025–26 are incomplete.
+
+- **Human Coronavirus (HCoV)** results were withheld from this dataset for
+  unknown reasons. Data on **daycare attendance** and **smoking exposure**,
+  which Amarin et al. included as covariates, were also withheld and could
+  not be incorporated.
+
+- **Co-detection flag**: The pre-derived variable `c_othercoin6` (any HMPV
+  co-detection, research-tested specimens only) is used as the initial flag for
+  identifying co-detected cases. Individual pathogen columns are then used to
+  assign the specific co-detection group label.
 
 ---
 
-*Generated with Quarto. Contact Ray Pomponio / Anna Wang-Erickson for questions.*
+*Generated with Quarto. Contact Ray Pomponio (raymond.pomponio@outlook.com) for questions.*
