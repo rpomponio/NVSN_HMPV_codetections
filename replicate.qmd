@@ -6,6 +6,8 @@ date: today
 output-file: "Replication Analysis May 2026.html"
 format:
   html:
+    code-fold: true
+    code-summary: "Show the code"
     embed-resources: true
     df-print: paged
     toc: true
@@ -25,8 +27,9 @@ approach of Amarin et al. (2026) for RSV, applied here to **human metapneumoviru
  The target outputs are:
 
 - A flow diagram of study participants among ARI-enrolled medical encounters
-- **Table 1**: Baseline characteristics and outcomes of HMPV-positive cases,
-  stratified by co-detection status 
+- A table of baseline characteristics and outcomes of HMPV-positive cases,
+  stratified by co-detection status
+- An UpSet plot of the most common co-detection patterns among HMPV-positives
 
 ---
 
@@ -51,6 +54,10 @@ theme_set(theme_pubclean(base_size=14))
 ```{r load-data}
 # ── Load CSV (update path as needed) ──────────────────────────────────────────
 cdc <- fread("Data/Pitt_Anna_HMPV_APR26.csv")
+
+cdc[, hospital_status:=fcase(
+  c_finalstatus==1, "Hospitalized",
+  default="Not Hospitalized")]
 
 # ── ARI season labels (11 seasons, 2015-16 through 2025-26) ──────────────────
 cdc[, c_ariyear := factor(
@@ -106,6 +113,7 @@ cdc[is.na(respvisitdt),
 ```{r}
 #| label: fig-consort
 #| fig-cap: "Flow diagram of study participants"
+#| fig-width: 8
 #| echo: false
 
 cdc[, exc:=fcase(
@@ -119,10 +127,13 @@ cdc[, codetect:=fcase(
   c_othercoin6==1, "At least 1 other virus detected",
   default="No other virus was detected")]
 cdc[c_othercoin6==1, codetectn:=rowSums(.SD==1),
-  .SDcols=c("tAdeno", "anyflu_result", "piv14_pos", "c_rsv_result", "rhent_pos")]
+  .SDcols=c("tAdeno", "c_rsv_result", "anyflu_result", "piv14_pos", "rhent_pos")]
 cdc[codetectn > 1, more:="More than 1 other virus detected"]
 
-out <- consort_plot(
+# ── Analytic cohort: singly-detected HMPV cases or single co-detections ───────
+dat <- cdc[is.na(exc) & is.na(rem) & (c_othercoin6==0 | is.na(more))]
+
+consort_plot(
   cdc,
   order = c(Caseid    = "Enrolled from outpatient, emergency, or inpatient",
             exc       = "**Excluded**",
@@ -130,19 +141,15 @@ out <- consort_plot(
             rem       = "**Undetected**",
             Caseid    = "Human metapneumovirus detected by research testing",
             codetect  = "",
-            more      = "",
+            more      = "**Dropped**",
             Caseid    = "Analyzed"),
   side_box   = c("rem", "exc", "more"),
   allocation = "codetect")
-plot(out, grViz = TRUE)
-
-# ── Analytic cohort: singly-detected HMPV cases or single co-detections ───────
-dat <- cdc[is.na(exc) & is.na(rem) & (c_othercoin6==0 | is.na(more))]
 ```
 
 ---
 
-# Table 1: Characteristics of HMPV-Positive Cases
+# Characteristics of HMPV-Positive Cases
 
 Stratified by co-detection status.
 
@@ -157,9 +164,6 @@ dat[, codetect_status:=fcase(
   c_rsv_result==1, "HMPV/RSV",
   rhent_pos==1, "HMPV/HRV",
   default="HMPV Only")]
-dat[, hospital_status:=fcase(
-  c_finalstatus==1, "Hospitalized",
-  default="Not Hospitalized")]
 
 tbl1.vars <- c(
   # Demographics
@@ -196,30 +200,83 @@ tbl1 <- tbl_summary(
       all_continuous()  ~ "{median} ({p25}, {p75})",
       all_categorical() ~ "{n} ({p}%)")) |>
   bold_labels() |>
-  remove_footnote_header() |>
-  modify_caption("Demographic and clinical characteristics of HMPV-positive cases by co-detection status")
+  remove_footnote_header()
 
 tbl1
 ```
 
+---
+
+# Co-detection Patterns
+
+```{r}
+#| label: fig-upset-hmpv
+#| fig-cap: "Most common co-detection patterns among HMPV-positive cases (top 15 combinations)"
+#| echo: false
+
+lab.paths <- c(
+  HMPV  = "tmpv",
+  RSV   = "c_rsv_result",
+  Adeno = "tAdeno",
+  Flu   = "anyflu_result",
+  PIV   = "piv14_pos",
+  Rhino = "rhent_pos")
+
+# ── List-column of detected pathogen names ─────────────────────────────────────
+customFun <- function(results) names(lab.paths)[results == 1]
+cdc[, lst_detections:=apply(.SD, 1, customFun), .SDcols=unname(lab.paths)]
+
+ggplot(cdc[tmpv==1], aes(x=lst_detections, fill=hospital_status)) +
+  geom_bar(position=position_dodge(width=1)) +
+  scale_x_upset(n_intersections=15) +
+  geom_text(stat="count", aes(label=after_stat(count)),
+            position=position_dodge(width=1), vjust=-0.5, size=3) +
+  scale_y_continuous(name="Number of Cases",
+                     expand=expansion(mult=c(0, 0.12))) +
+  labs(x="Co-detections with HMPV", fill="Final Status")
+```
+
+---
+
+# Admission Odds by Co-detection Status
+
+Adjusting for age at presentation (continuous), preterm birth (dichotomous), underlying medical conditions (dichotomous), and study site (categorical).
+
+```{r}
+#| label: tbl-table2
+#| tbl-cap: "Adjusted Odds Ratios of Hospitalization by co-detection status"
+
+fit <- glm(hospital_status=="Hospitalized" ~ c_agemonths + c_premature +
+             c_xunderlying + studysite + codetect_status,
+           family=binomial,
+           data=dat)
+
+tbl2 <- tbl_regression(
+  fit,
+  exponentiate=TRUE,
+  include=c(codetect_status),
+  intercept=FALSE,
+  label=list(codetect_status ~ "Detection")) |>
+  add_n(location="level") |>
+  add_nevent(location="level") |>
+  bold_labels() |>
+  bold_p()
+tbl2
+```
 
 ---
 
 # Notes and Caveats
 
 - **Scope**: This document replicates the descriptive and tabular framework of
-  Amarin et al. (2026) only. Regression modeling, subgroup analyses, and
-  journal-club extensions are intentionally excluded at this stage.
+  Amarin et al. (2026): *Respiratory Syncytial Virus Co-Detection With Other Respiratory Viruses Is Not Significantly Associated With Worse Clinical Outcomes Among Children Aged <2 Years*.
 
 - **c_respsup / c_blowby / c_hfnc / c_cpap** are only available for
   `c_ariyear ≥ 8` (2022-23 onward). For earlier seasons, supplemental-O2
-  classification in Severity Level 3 relies on `c_suppoxy` alone. This
-  introduces a potential under-ascertainment of Level 3 in earlier seasons;
-  consider flagging this in any manuscript methods section.
+  classification in Severity Level 3 relies on `c_suppoxy` alone.
 
 - **Race/ethnicity**: Two variables are available (`c_race_int` and
-  `c_race_int2`). The finer-grained `c_race_int2` is used here. Confirm with
-  PI whether this is the preferred variable.
+  `c_race_int2`). The more-granular `c_race_int2` is used here.
 
 - **HMPV season year 11 (2025-26)** is ongoing as of the data pull date
   (Apr 2026). Consider censoring or labeling partial-season data accordingly.
