@@ -54,6 +54,7 @@ distinct purpose:
 - **`consort`**: draws the participant flow (CONSORT-style) diagram
 - **`grid`**: low-level graphics support used internally by `consort`
 - **`gtsummary`**: produces publication-ready summary tables
+- **`gt`**: underlying table engine used by `gtsummary`; required here to control column widths in Table 1
 - **`ggplot2`** and **`ggpubr`**: general-purpose plotting
 - **`ggupset`**: extends `ggplot2` to render UpSet plots
 
@@ -62,6 +63,7 @@ library(data.table)
 library(consort)
 library(grid)
 library(gtsummary)
+library(gt)
 library(ggplot2)
 library(ggpubr)
 library(ggupset)
@@ -249,10 +251,11 @@ we report the median and interquartile range (IQR). For categorical variables
 (e.g., sex, insurance type), we report counts and column percentages. Rows
 labeled "Unknown" or missing indicate data that were not collected or could
 not be determined. The clinical outcome variables (length of stay, ICU
-admission, supplemental oxygen, intubation) are only meaningful for the
-subset of patients who were hospitalized; non-hospitalized cases contribute
-zeros or missing values to those rows, and this should be kept in mind when
-interpreting those figures.
+admission, supplemental oxygen, intubation) appear at the bottom of the table
+under *Final Status* and are only meaningful for hospitalized cases;
+non-hospitalized cases contribute zeros or missing values to those rows.
+The table is paginated (11 rows per page) and horizontally scrollable to
+accommodate the six co-detection columns.
 
 ```{r}
 #| label: tbl-table1
@@ -307,8 +310,19 @@ tbl1 <- tbl_summary(
       all_continuous()  ~ "{median} ({p25}, {p75})",
       all_categorical() ~ "{n} ({p}%)")) |>
   bold_labels() |>
-  remove_footnote_header()
-
+  remove_footnote_header() |>
+  # ── Pass to gt for column-width control, then render as interactive widget ────
+  #    Abbreviating the co-detection column headers keeps the table from
+  #    overflowing the page width. cols_width() fixes the data columns to 95 px
+  #    each; the row-label column gets more space for legibility.
+  #    opt_interactive() adds pagination (11 rows) and horizontal scrolling.
+  modify_header(
+    all_stat_cols() ~ "**{level}**") |>
+  as_gt() |>
+  cols_width(
+    label     ~ px(220),
+    everything() ~ px(95)) |>
+  opt_interactive(use_compact_mode=TRUE, page_size_default=11)
 tbl1
 ```
 
@@ -415,39 +429,77 @@ tbl2 <- tbl_regression(
 tbl2
 ```
 
+Two findings from this model are worth highlighting, each with appropriate caution.
+
+**HMPV/RSV and lower admission odds.** The HMPV/RSV group showed lower adjusted
+odds of hospitalization relative to HMPV-alone cases. One possible explanation
+is that a meaningful proportion of RSV-positive results in this group reflect
+residual shedding of a prior RSV infection rather than true co-infection with
+active RSV disease. RSV RNA can remain PCR-detectable beyond the period of
+active viral replication, particularly in young children, raising the possibility
+that a positive RSV result does not reflect an actively contributing co-infection
+(Sullender et al., *J Clin Microbiol*, 2003; Hall et al., *Epidemiol Infect*, 2015).
+If these were predominantly patients with an active HMPV infection and incidental
+RSV shedding, their illness severity might naturally resemble that of HMPV-only
+cases. This remains one possible interpretation and cannot be confirmed without
+cycle-threshold values or longitudinal data.
+
+**HMPV/Adeno and higher admission odds.** The HMPV/Adeno group showed higher
+adjusted odds of hospitalization. Adenovirus is well-recognized as a cause of
+severe respiratory illness in children, including pneumonia and bronchiolitis.[^2]
+A true co-infection with active adenovirus disease alongside HMPV is therefore
+a plausible driver of greater illness severity, though this analysis cannot
+distinguish co-infection from incidental co-detection. These observations are
+preliminary and descriptive; formal testing of these hypotheses is beyond the
+scope of the current work.
+
+[^2]: Lynch JP III, Fishbein M, Echavarria M. Adenovirus. *Semin Respir Crit Care Med*. 2011;32(4):494–511. doi:10.1055/s-0031-1283287.
+
 ---
 
 # Comparison with Amarin et al. (2026)
 
 This analysis replicates the design of Amarin et al. (2026), who examined
 whether viral co-detections were associated with worse clinical outcomes among
-children with laboratory-confirmed RSV. Their key methodological choices are preserved here, restricting to single co-detections, adjusting for age and underlying conditions, and using hospitalization as the primary outcome.
+children with laboratory-confirmed RSV. Their key methodological choices are
+preserved here: restricting to single co-detections, adjusting for age and
+underlying conditions, and using hospitalization as the primary outcome.
 
 **The most important difference** between this analysis and Amarin et al. is
 the study population. Amarin et al. restricted their cohort to **children
-under 2 years of age** and those **enrolled from emergency departments or inpatient units**, a group with well-established vulnerability to RSV
-and the primary target of RSV prevention strategies. **The present analysis
-includes all enrolled ages and setting** in the NVSN dataset and does not apply further restrictions. This means our results are not directly comparable to
-Amarin et al. on the basis of the outcome alone, and any interpretation of
-co-detection effects should be considered in the context of a broader and
-more heterogeneous age distribution.
+under 2 years of age** enrolled from **emergency departments or inpatient
+units** — a group with well-established vulnerability to RSV and the primary
+target of RSV prevention strategies. **The present analysis includes all
+enrolled ages and care settings** in the NVSN dataset without further
+restriction. Our results are therefore not directly comparable to Amarin et al.,
+and any interpretation of co-detection effects should be considered in the
+context of a broader and more heterogeneous age distribution.
 
 ---
 
 # Additional Notes
 
+- **RSV shedding and cycle-threshold values**: The interpretation of lower
+  admission odds among HMPV/RSV cases as possibly reflecting residual RSV
+  shedding could in principle be explored using the `tmpvCT` (HMPV CT value)
+  field available in this dataset. Higher CT values (lower viral load) in
+  HMPV/RSV cases relative to HMPV-only cases would be consistent with
+  later-stage or co-shedding presentations. Similarly, RSV CT values, if
+  available, would help distinguish active RSV co-infection from shedding.
+  This comparison is flagged as a potential extension but is not performed here.
+
 - **Race/ethnicity**: Two variables are available (`c_race_int` [4 categories]
   and `c_race_int2` [7 categories]). The more granular `c_race_int2` is used
-  here throughout.
+  throughout.
 
 - **Season 11 (2025–26)** was ongoing at the time of the data pull (April 2026).
   Cases from this partial season are included but should be interpreted
   accordingly; seasonal-level summaries for 2025–26 are incomplete.
 
 - **Co-detection flag**: The pre-derived variable `c_othercoin6` (any HMPV
-  co-detection, research-tested specimens only) is used as the initial flag for
-  identifying co-detected cases. Individual pathogen columns are then used to
-  assign the specific co-detection group label.
+  co-detection, research-tested specimens only) is used as the initial flag
+  for identifying co-detected cases. Individual pathogen columns are then used
+  to assign the specific co-detection group label.
 
 ---
 
