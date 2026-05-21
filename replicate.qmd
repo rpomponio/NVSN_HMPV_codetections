@@ -1,5 +1,5 @@
 ---
-title: "HMPV Illness Severity and Co-detections: NVSN 2015–2026"
+title: "HMPV Co-detections in NVSN: 2015-2026"
 subtitle: "Replication of Amarin et al. (2026) Framework Applied to HMPV"
 author: "Ray Pomponio / Anna Wang-Erickson"
 date: today
@@ -34,12 +34,14 @@ Associated With Worse Clinical Outcomes Among Children Aged <2 Years.
 
 The target outputs are:
 
-- A flow diagram of study participants among ARI-enrolled medical encounters
+- A flow diagram of study participants among ARI-enrolled medical encounters (Amarin's **Figure 1**).
 - A table of baseline characteristics and outcomes of HMPV-positive cases,
-  stratified by co-detection status
-- An UpSet plot of the most common co-detection patterns among HMPV-positives
+  stratified by co-detection status (Amarin's **Table 1**).
+- An UpSet[^1] plot of the most common co-detection patterns among HMPV-positives.
 - A regression summary of adjusted odds ratios of hospital admission status,
-  grouped by co-detection status
+  grouped by co-detection status (Amarin's **Table 2**).
+
+[^1]: UpSet plots visualize combinations of categorical attributes (here, which viruses were co-detected).
 
 ---
 
@@ -53,8 +55,7 @@ distinct purpose:
 - **`grid`**: low-level graphics support used internally by `consort`
 - **`gtsummary`**: produces publication-ready summary tables
 - **`ggplot2`** and **`ggpubr`**: general-purpose plotting
-- **`ggupset`**: extends `ggplot2` to render UpSet plots, which visualize
-  combinations of categorical attributes (here, which viruses were co-detected)
+- **`ggupset`**: extends `ggplot2` to render UpSet plots
 
 ```{r setup}
 library(data.table)
@@ -77,8 +78,8 @@ The raw dataset is a CSV file extracted from the NVSN surveillance system.
 Before any analysis, several housekeeping steps are required:
 
 1. **Derive hospitalization status** — a simple binary flag (hospitalized vs.
-   not) that will serve both as a grouping variable in Table 1 and as the
-   outcome in the logistic regression.
+   not) that will serve both as a grouping variable in @tbl-table1 and as the
+   outcome variable in the logistic regression in @tbl-table2.
 2. **Apply human-readable labels** to coded categorical variables (season,
    site, sex, insurance, race/ethnicity), so that all tables and figures are
    self-explanatory without reference to a separate data dictionary.
@@ -180,9 +181,9 @@ There are three grounds for exclusion, applied in order:
    the encounter's highest level of care could not be completed.
 
 After excluding these cases, HMPV-negative and inconclusive results are set
-aside (shown as "Undetected" in the diagram). Among confirmed HMPV-positive
+aside (shown as "Undetected" in @fig-consort). Among confirmed HMPV-positive
 cases, those with **more than one co-detected virus** are dropped to keep
-co-detection groups mutually exclusive and directly comparable — the same
+co-detection groups mutually exclusive and directly comparable; this is the same
 restriction applied by Amarin et al. (2026). The remaining cases form the
 analytic cohort, split by whether any co-pathogen was detected alongside HMPV.
 
@@ -190,6 +191,7 @@ analytic cohort, split by whether any co-pathogen was detected alongside HMPV.
 #| label: fig-consort
 #| fig-cap: "Flow diagram of study participants from ARI enrollment through the final analytic cohort. Cases are split at the bottom by co-detection status (HMPV alone vs. HMPV with one co-detected virus). Cases with more than one co-detected virus are dropped to maintain mutually exclusive comparison groups, following Amarin et al. (2026)."
 #| fig-width: 8
+#| fig-height: 6
 #| echo: false
 
 # ── Define exclusion reasons (applied before HMPV result is known) ────────────
@@ -240,11 +242,10 @@ of all cases in the analytic cohort, stratified by co-detection status.
 Each column represents a distinct viral detection group: cases in which HMPV
 was the only virus detected, and cases in which HMPV was detected alongside
 one specific co-pathogen (adenovirus, influenza, parainfluenza [PIV],
-RSV, or rhinovirus/enterovirus [HRV]).
+RSV, or rhinovirus/enterovirus [HRV]).[**Human Coronavirus (HCoV)** results were withheld from this dataset for unknown reasons. Data on **daycare attendance** and **smoking exposure**, which Amarin et al. included as baseline characteristics, were also withheld and could not be incorporated.]{.aside}
 
 **How to read this table:** For continuous variables (e.g., age in months),
-we report the median and interquartile range (IQR) — that is, the middle value
-and the range from the 25th to 75th percentile. For categorical variables
+we report the median and interquartile range (IQR). For categorical variables
 (e.g., sex, insurance type), we report counts and column percentages. Rows
 labeled "Unknown" or missing indicate data that were not collected or could
 not be determined. The clinical outcome variables (length of stay, ICU
@@ -315,19 +316,11 @@ tbl1
 
 # Co-detection Patterns
 
-The UpSet plot below visualizes how often HMPV was detected alone versus
-alongside each possible combination of the other five respiratory viruses
-tested in the research panel (RSV, adenovirus, influenza, parainfluenza,
-and rhinovirus/enterovirus). Each bar represents a unique combination of
-detected viruses; the dots and connecting lines below the bars indicate which
-viruses are included in that combination. Bars are colored by whether the
-patient was ultimately hospitalized, providing a first visual impression of
-whether certain co-detection patterns are associated with greater illness
-severity.
+The UpSet plot below visualizes how often HMPV was detected in isolation versus each possible combination of the other five respiratory viruses tested in the research panel (RSV, adenovirus, influenza, parainfluenza, and rhinovirus/enterovirus). Each bar represents a unique combination of detected viruses; the dots and connecting lines below the bars indicate which viruses are included in that combination. Bars are colored by whether the patient was ultimately hospitalized, providing a first visual impression of whether certain co-detection patterns are associated with greater illness severity.
 
-Note that this figure is drawn from the **full HMPV-positive universe** (before
-the restriction to single co-detections), so all combinations — including those
-with two or more co-pathogens — are visible here. Only the top 15 most common
+Note that this figure is drawn from the **HMPV-positive universe** (before
+the restriction to single co-detections), so all combinations--including those
+with two or more co-pathogens--are visible here. Only the top 15 most common
 combinations are shown.
 
 ```{r}
@@ -414,52 +407,42 @@ tbl2 <- tbl_regression(
   label=list(codetect_status ~ NA)) |>
   add_n(location="level") |>
   add_nevent(location="level") |>
-  modify_header(label ~ "**Detection**", stat_nevent ~ "**Admitted**") |>
+  modify_header(label ~ "**Detection**",
+                stat_n ~ "**Total**",
+                stat_nevent ~ "**Admitted**",
+                estimate ~ "**aOR**") |>
   bold_p()
 tbl2
 ```
 
 ---
 
-# Notes and Caveats
-
-## Comparison with Amarin et al. (2026)
+# Comparison with Amarin et al. (2026)
 
 This analysis replicates the design of Amarin et al. (2026), who examined
 whether viral co-detections were associated with worse clinical outcomes among
-children with laboratory-confirmed RSV. Their key methodological choices —
-restricting to single co-detections, adjusting for age and underlying
-conditions, and using hospitalization as the primary outcome — are preserved here.
+children with laboratory-confirmed RSV. Their key methodological choices are preserved here, restricting to single co-detections, adjusting for age and underlying conditions, and using hospitalization as the primary outcome.
 
 **The most important difference** between this analysis and Amarin et al. is
 the study population. Amarin et al. restricted their cohort to **children
-under 2 years of age**, a group with well-established vulnerability to RSV
+under 2 years of age** and those **enrolled from emergency departments or inpatient units**, a group with well-established vulnerability to RSV
 and the primary target of RSV prevention strategies. **The present analysis
-includes all enrolled ages** in the NVSN dataset and does not apply that
-age restriction. This means our results are not directly comparable to
+includes all enrolled ages and setting** in the NVSN dataset and does not apply further restrictions. This means our results are not directly comparable to
 Amarin et al. on the basis of the outcome alone, and any interpretation of
 co-detection effects should be considered in the context of a broader and
 more heterogeneous age distribution.
 
-## Additional Caveats
+---
 
-- **Respiratory support variables** (`c_respsup`, `c_blowby`, `c_hfnc`,
-  `c_cpap`) are only available for seasons 2022–23 onward (`c_ariyear ≥ 8`).
-  For earlier seasons, supplemental oxygen classification relies on `c_suppoxy`
-  alone, which may lead to under-ascertainment of oxygen support in those years.
+# Additional Notes
 
 - **Race/ethnicity**: Two variables are available (`c_race_int` [4 categories]
   and `c_race_int2` [7 categories]). The more granular `c_race_int2` is used
-  throughout.
+  here throughout.
 
 - **Season 11 (2025–26)** was ongoing at the time of the data pull (April 2026).
   Cases from this partial season are included but should be interpreted
   accordingly; seasonal-level summaries for 2025–26 are incomplete.
-
-- **Human Coronavirus (HCoV)** results were withheld from this dataset for
-  unknown reasons. Data on **daycare attendance** and **smoking exposure**,
-  which Amarin et al. included as covariates, were also withheld and could
-  not be incorporated.
 
 - **Co-detection flag**: The pre-derived variable `c_othercoin6` (any HMPV
   co-detection, research-tested specimens only) is used as the initial flag for
@@ -468,4 +451,4 @@ more heterogeneous age distribution.
 
 ---
 
-*Generated with Quarto. Contact Ray Pomponio (raymond.pomponio@outlook.com) for questions.*
+*Generated with Quarto and Claude (Anthropic). Contact Ray Pomponio for questions.*
