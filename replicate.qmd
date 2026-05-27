@@ -30,7 +30,7 @@ the New Vaccine Surveillance Network (NVSN) spanning the 2015–16 through
 **Reference:** Amarin JZ, Shaikha AA, Bunsow LI, et al. Respiratory Syncytial
 Virus Co-Detection With Other Respiratory Viruses Is Not Significantly
 Associated With Worse Clinical Outcomes Among Children Aged <2 Years.
-*Open Forum Infectious Diseases*. 2026.
+*Open Forum Infectious Diseases*. 2026. <https://doi.org/10.1093/cid/ciaf194>.
 
 The target outputs are:
 
@@ -431,19 +431,6 @@ tbl2
 
 Two findings from this model are worth highlighting, each with appropriate caution.
 
-**HMPV/RSV and lower admission odds.** The HMPV/RSV group showed lower adjusted
-odds of hospitalization relative to HMPV-alone cases. One possible explanation
-is that a meaningful proportion of RSV-positive results in this group reflect
-residual shedding of a prior RSV infection rather than true co-infection with
-active RSV disease. RSV RNA can remain PCR-detectable beyond the period of
-active viral replication, particularly in young children, raising the possibility
-that a positive RSV result does not reflect an actively contributing co-infection
-(Sullender et al., *J Clin Microbiol*, 2003; Hall et al., *Epidemiol Infect*, 2015).
-If these were predominantly patients with an active HMPV infection and incidental
-RSV shedding, their illness severity might naturally resemble that of HMPV-only
-cases. This remains one possible interpretation and cannot be confirmed without
-cycle-threshold values or longitudinal data.
-
 **HMPV/Adeno and higher admission odds.** The HMPV/Adeno group showed higher
 adjusted odds of hospitalization. Adenovirus is well-recognized as a cause of
 severe respiratory illness in children, including pneumonia and bronchiolitis.[^2]
@@ -453,7 +440,12 @@ distinguish co-infection from incidental co-detection. These observations are
 preliminary and descriptive; formal testing of these hypotheses is beyond the
 scope of the current work.
 
+**HMPV/RSV and lower admission odds.** The HMPV/RSV group showed lower adjusted
+odds of hospitalization relative to HMPV-alone cases. One possible explanation is that a meaningful proportion of RSV-positive results in this group reflect residual shedding of a prior RSV infection rather than true co-infection with active RSV disease. RSV RNA can remain PCR-detectable up to two weeks, and longer in younger or more severely ill children, raising the possibility that a positive RSV result does not reflect an actively contributing co-infection.[^3] Notably, HMPV/RSV cases were younger on average than HMPV-only cases (@tbl-table1), and younger children are typically more likely to be hospitalized — yet the HMPV/RSV group showed lower admission odds after adjusting for age. This pattern is consistent with the shedding hypothesis: if RSV detections in this group were incidental, their clinical trajectory would reflect HMPV illness alone, potentially explaining why their admission rate falls below what their age profile would otherwise predict. This result warrants careful follow-up.
+
 [^2]: Lynch JP III, Fishbein M, Echavarria M. Adenovirus. *Semin Respir Crit Care Med*. 2011;32(4):494–511. doi:10.1055/s-0031-1283287.
+
+[^3]: Munywoki PK, Koech DC, Agoti CN, et al. Influence of age, severity of infection, and co-infection on the duration of respiratory syncytial virus (RSV) shedding. *Epidemiol Infect.* 2015;143(4):804–812. doi:10.1017/S0950268814001393.
 
 ---
 
@@ -477,7 +469,7 @@ context of a broader and more heterogeneous age distribution.
 
 ---
 
-# Additional Notes
+# Additional Considerations
 
 - **RSV shedding and cycle-threshold values**: The interpretation of lower
   admission odds among HMPV/RSV cases as possibly reflecting residual RSV
@@ -486,7 +478,7 @@ context of a broader and more heterogeneous age distribution.
   HMPV/RSV cases relative to HMPV-only cases would be consistent with
   later-stage or co-shedding presentations. Similarly, RSV CT values, if
   available, would help distinguish active RSV co-infection from shedding.
-  This comparison is flagged as a potential extension but is not performed here.
+  This comparison is noted as a potential extension but is not performed here.
 
 - **Race/ethnicity**: Two variables are available (`c_race_int` [4 categories]
   and `c_race_int2` [7 categories]). The more granular `c_race_int2` is used
