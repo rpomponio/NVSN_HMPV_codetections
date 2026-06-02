@@ -1,0 +1,606 @@
+---
+title: "HMPV Co-detections in NVSN: 2015-2026"
+subtitle: "Investigating Illness Severity Effects"
+author: "Ray Pomponio / Anna Wang-Erickson"
+date: today
+output-file: "Comprehensive Analysis June 2026.html"
+format:
+  html:
+    code-fold: true
+    code-summary: "Show the code"
+    embed-resources: true
+    df-print: paged
+    toc: true
+    toc-depth: 3
+execute:
+  message: false
+  warning: false
+fig-cap-location: top
+---
+
+# Overview
+
+This document examines the association between viral co-detection and illness
+severity in children with **human metapneumovirus (HMPV)**, using data from
+the New Vaccine Surveillance Network (NVSN) spanning the 2015–16 through
+2025–26 surveillance seasons. The analytical framework is informed by Amarin
+et al. (2026), who studied co-detection effects in children with RSV, though
+the present analysis departs from their approach in several ways described
+below.
+
+**Reference:** Amarin JZ, Shaikha AA, Bunsow LI, et al. Respiratory Syncytial
+Virus Co-Detection With Other Respiratory Viruses Is Not Significantly
+Associated With Worse Clinical Outcomes Among Children Aged <2 Years.
+*Open Forum Infectious Diseases*. 2026. <https://doi.org/10.1093/cid/ciaf194>.
+
+The target outputs are:
+
+- A flow diagram of study participants among ARI-enrolled medical encounters.
+- A table of baseline characteristics and outcomes of HMPV-positive cases,
+  stratified by co-detection status.
+- An UpSet[^1] plot of the most common co-detection patterns among HMPV-positives.
+- A proportional odds regression summary of adjusted odds ratios for elevated
+  illness severity, grouped by co-detection status.
+- A sensitivity analysis restricted to patients without pre-existing conditions,
+  to assess whether underlying conditions confound the primary result.
+
+[^1]: UpSet plots visualize combinations of categorical attributes (here, which viruses were co-detected).
+
+---
+
+# Setup
+
+The following packages are required to run this analysis. Each serves a
+distinct purpose:
+
+- **`data.table`**: fast data manipulation for large surveillance datasets
+- **`MASS`**: provides `polr()`, which fits the proportional odds (ordinal
+  logistic) regression model used in @tbl-table2 and @tbl-table3
+- **`consort`**: draws the participant flow diagram
+- **`grid`**: low-level graphics support used internally by `consort`
+- **`gtsummary`**: produces publication-ready summary tables
+- **`gt`**: underlying table engine used by `gtsummary`; required here to
+  control column widths in @tbl-table1
+- **`ggplot2`** and **`ggpubr`**: general-purpose plotting
+- **`ggupset`**: extends `ggplot2` to render UpSet plots
+
+```{r setup}
+library(data.table)
+library(MASS)
+library(consort)
+library(grid)
+library(gtsummary)
+library(gt)
+library(ggplot2)
+library(ggpubr)
+library(ggupset)
+
+set_consort_defaults(txt_gp=gpar(cex=0.6), parse_markup=TRUE)
+theme_set(theme_pubclean(base_size=14))
+```
+
+---
+
+# Data Loading and Cleaning
+
+The raw dataset is a CSV file extracted from the NVSN surveillance system.
+Before any analysis, several housekeeping steps are required:
+
+1. **Derive hospitalization status** — a simple binary flag (hospitalized vs.
+   not) used as a grouping variable in @tbl-table1.
+2. **Derive ordinal illness severity** — a six-level ordered outcome ranging
+   from routine or ED discharge (Level 1) to death (Level 6). This is the
+   primary outcome in @tbl-table2 and @tbl-table3, and captures gradations of
+   severity that a binary hospitalization flag would obscure.
+3. **Apply human-readable labels** to coded categorical variables (season,
+   site, sex, insurance, race/ethnicity).
+4. **Coerce binary (0/1) clinical flags** to integer type.
+5. **Backfill missing specimen dates** from the screen date.
+
+```{r load-data}
+# ── Load CSV (update path as needed) ──────────────────────────────────────────
+cdc <- fread("Data/Pitt_Anna_HMPV_APR26.csv")
+
+# ── Derive binary hospitalization flag ────────────────────────────────────────
+#    c_finalstatus == 1 means the patient was admitted as an inpatient;
+#    all other values (ED, outpatient, urgent care) are grouped as "Not Hospitalized"
+cdc[, hospital_status:=fcase(
+  c_finalstatus==1, "Hospitalized",
+  default="Not Hospitalized")]
+
+# ── Derive ordinal illness severity (primary outcome) ─────────────────────────
+#    Six levels, assigned in descending priority so each case is classified
+#    at its highest observed level of care. Levels 5 and 6 are sparse but
+#    retained to avoid information loss at the severe end of the spectrum.
+#    Level 1: ED, outpatient, or urgent care discharge
+#    Level 2: Admitted to hospital (no supplemental oxygen)
+#    Level 3: Admitted + supplemental oxygen (any modality)
+#    Level 4: ICU admission
+#    Level 5: Mechanical ventilation or ECMO
+#    Level 6: Death
+cdc[, c_severity := fcase(
+  c_died      == 1L,  6L,
+  c_intubated == 1L,  5L,
+  inptEcmo    == 1L,  5L,
+  inptICU     == 1L,  4L,
+  hospital_status == "Hospitalized" & (c_suppoxy == 1L | c_blowby == 1L |
+    c_hfnc == 1L | c_cpap == 1L),  3L,
+  hospital_status == "Hospitalized",  2L,
+  default = 1L)]
+cdc[, c_severity := factor(c_severity, levels=1:6, ordered=TRUE)]
+
+# ── ARI season labels (11 seasons, 2015-16 through 2025-26) ──────────────────
+cdc[, c_ariyear := factor(
+  c_ariyear,
+  levels = 1:11,
+  labels = c("2015-16", "2016-17", "2017-18", "2018-19", "2019-20",
+             "2020-21", "2021-22", "2022-23", "2023-24", "2024-25", "2025-26")
+)]
+
+# ── Site labels ───────────────────────────────────────────────────────────────
+#    Site code 7 is not used; Pittsburgh is coded as 8
+cdc[, studysite := factor(
+  studysite,
+  levels = c(1:6, 8),
+  labels = c("Vanderbilt", "Rochester", "Cincinnati", "Seattle",
+             "Houston", "Kansas City", "Pittsburgh")
+)]
+
+# ── Sex labels ────────────────────────────────────────────────────────────────
+cdc[, sexch := factor(sexch, levels=c(1, 2), labels=c("Male", "Female"))]
+
+# ── Insurance labels ──────────────────────────────────────────────────────────
+#    Code 8 (Unknown) is excluded; unknown cases appear as missing in tables
+cdc[, scrinsurance := factor(
+  scrinsurance,
+  levels = c(1, 2, 3, 4),
+  labels = c("Public", "Private", "Both", "None/Self-Pay"))]
+
+# ── Race/ethnicity ────────────────────────────────────────────────────────────
+#    Using c_race_int2 (7 categories). NH = Non-Hispanic; AI/AN = American
+#    Indian / Alaska Native. Code 8 (Unknown) excluded; appears as missing.
+cdc[, c_race_int2 := factor(
+  c_race_int2,
+  levels = 1:7,
+  labels = c("White NH", "Black NH", "Hispanic", "NH Pacific Islander",
+             "AI/AN NH", "Asian NH", "Multiple/Other NH"))]
+
+# ── Coerce binary clinical flags to integer 0/1 ───────────────────────────────
+#    These variables may import as character strings; explicit coercion avoids
+#    errors in table summaries and models.
+binary.vars <- c("c_xunderlying", "c_uresp", "c_unuerologic", "c_uoncolimmu",
+                 "c_ucardiovasc", "c_premature",
+                 "c_respsup", "c_suppoxy", "inptICU", "inptEcmo",
+                 "c_blowby", "c_hfnc", "c_cpap", "c_intubated", "c_died",
+                 "ANYpneumDx", "ANYbronchDx", "ANYasthDx", "ANYuriDx",
+                 "ANYrespfailDx")
+cdc[, (binary.vars) := lapply(.SD, function(x) as.integer(as.character(x))),
+    .SDcols = binary.vars]
+
+# ── Backfill specimen date from screen date where missing ─────────────────────
+cdc[is.na(respvisitdt),
+    respvisitdt := as.IDate(as.Date(scrdate, format="%m/%d/%Y"))]
+```
+
+---
+
+# Inclusion and Exclusion of Participants
+
+Not every enrolled encounter is eligible for this analysis. The flow diagram
+below tracks cases from initial enrollment through to the final analytic cohort,
+making the reasons for exclusion explicit and auditable.
+
+There are three grounds for exclusion, applied in order:
+
+1. **No research testing** — the specimen was not tested using the research
+   multiplex panel, so HMPV status cannot be determined.
+2. **HMPV not tested** — the research panel was run, but the HMPV assay was
+   not performed (result code 8 = "not performed").
+3. **Final status undetermined** — the 10-day chart review needed to classify
+   the encounter's highest level of care could not be completed.
+
+After excluding these cases, HMPV-negative and inconclusive results are set
+aside (shown as "Undetected" in @fig-consort). Among confirmed HMPV-positive
+cases, those with **more than one co-detected virus** are dropped to keep
+co-detection groups mutually exclusive and directly comparable. The remaining
+cases form the analytic cohort, split by whether any co-pathogen was detected
+alongside HMPV.
+
+```{r}
+#| label: fig-consort
+#| fig-cap: "Flow diagram of study participants from ARI enrollment through the final analytic cohort. Cases are split at the bottom by co-detection status (HMPV alone vs. HMPV with one co-detected virus). Cases with more than one co-detected virus are dropped to maintain mutually exclusive comparison groups."
+#| fig-width: 8
+#| fig-height: 6
+#| echo: false
+
+# ── Define exclusion reasons (applied before HMPV result is known) ────────────
+cdc[, exc:=fcase(
+  research_tested!=1, "Sample not research-tested",
+  tmpv==8, "Sample not research-tested for HMPV",
+  is.na(c_finalstatus), "Final status undetermined")]
+
+# ── Among tested cases, flag those without a positive HMPV result ─────────────
+cdc[, rem:=fcase(
+  tmpv==0, "HMPV Negative",
+  tmpv==2, "HMPV Inconclusive")]
+
+# ── Among HMPV-positives, classify co-detection status ────────────────────────
+cdc[, codetect:=fcase(
+  c_othercoin6==1, "At least 1 other virus detected",
+  default="No other virus was detected")]
+
+# ── Count how many co-pathogens were detected (to identify multi-co-detections)
+cdc[c_othercoin6==1, codetectn:=rowSums(.SD==1),
+  .SDcols=c("tAdeno", "c_rsv_result", "anyflu_result", "piv14_pos", "rhent_pos")]
+cdc[codetectn > 1, more:="More than 1 other virus detected"]
+
+# ── Final analytic cohort: no exclusions, no ambiguous HMPV result,
+#    and at most one co-detected virus ─────────────────────────────────────────
+dat <- cdc[is.na(exc) & is.na(rem) & (c_othercoin6==0 | is.na(more))]
+
+consort_plot(
+  cdc,
+  order = c(Caseid    = "Enrolled from outpatient, emergency, or inpatient",
+            exc       = "**Excluded**",
+            Caseid    = "Tested for human metapneumovirus",
+            rem       = "**Undetected**",
+            Caseid    = "Human metapneumovirus detected by research testing",
+            codetect  = "",
+            more      = "**Dropped**",
+            Caseid    = "Analyzed"),
+  side_box   = c("rem", "exc", "more"),
+  allocation = "codetect")
+```
+
+---
+
+# Characteristics of HMPV-Positive Cases
+
+The table below describes the baseline characteristics and clinical outcomes
+of all cases in the analytic cohort, stratified by co-detection status.
+Each column represents a distinct viral detection group: cases in which HMPV
+was the only virus detected, and cases in which HMPV was detected alongside
+one specific co-pathogen (adenovirus, influenza, parainfluenza [PIV],
+RSV, or rhinovirus/enterovirus [HRV]).[**Human Coronavirus (HCoV)** results were withheld from this dataset for unknown reasons. Data on **daycare attendance** and **smoking exposure**, which Amarin et al. included as baseline characteristics, were also withheld and could not be incorporated.]{.aside}
+
+**How to read this table:** For continuous variables (e.g., age in months),
+we report the median and interquartile range (IQR). For categorical variables
+(e.g., sex, insurance type), we report counts and column percentages. Rows
+labeled "Unknown" or missing indicate data that were not collected or could
+not be determined. The clinical outcome variables (length of stay, ICU
+admission, supplemental oxygen, intubation) appear at the bottom of the table
+under *Final Status* and are only meaningful for hospitalized cases;
+non-hospitalized cases contribute zeros or missing values to those rows.
+The table is paginated (11 rows per page) and horizontally scrollable to
+accommodate the six co-detection columns.
+
+```{r}
+#| label: tbl-table1
+#| tbl-cap: "Baseline demographic characteristics and clinical outcomes of HMPV-positive cases, stratified by co-detection status. Co-detection groups are mutually exclusive (cases with more than one co-detected virus were excluded). Outcome variables (length of stay, ICU admission, supplemental oxygen, and intubation) are shown beneath Final Status and pertain only to hospitalized cases."
+
+# ── Derive the co-detection status grouping variable ─────────────────────────
+#    Priority is assigned in the order listed (Adeno first, HRV last);
+#    multi-detection cases have already been excluded, so this is a simple lookup
+dat[, codetect_status:=fcase(
+  tAdeno==1, "HMPV/Adeno",
+  anyflu_result==1, "HMPV/Flu",
+  piv14_pos==1, "HMPV/PIV",
+  c_rsv_result==1, "HMPV/RSV",
+  rhent_pos==1, "HMPV/HRV",
+  default="HMPV Only")]
+
+# ── Variables to include in Table 1, in display order ────────────────────────
+tbl1.vars <- c(
+  # Demographics
+  "c_agemonths", "sexch", "c_race_int2", "scrinsurance", "studysite",
+  # Comorbidities
+  "c_xunderlying", "c_uresp", "c_ucardiovasc", "c_unuerologic",
+  "c_uoncolimmu", "c_premature",
+  # Clinical outcomes (hospital_status first; inpatient-only outcomes follow)
+  "hospital_status", "c_los", "inptICU", "c_suppoxy", "c_intubated")
+
+tbl1 <- tbl_summary(
+  dat,
+  by       = codetect_status,
+  include  = all_of(tbl1.vars),
+  label    = list(
+      c_agemonths     ~ "Age in months, median (IQR)",
+      sexch           ~ "Sex",
+      c_race_int2     ~ "Race / Ethnicity",
+      scrinsurance    ~ "Insurance Type",
+      studysite       ~ "Study Site",
+      c_xunderlying   ~ "≥1 Underlying Condition",
+      c_uresp         ~ "Respiratory Condition",
+      c_ucardiovasc   ~ "Cardiovascular Condition",
+      c_unuerologic   ~ "Neuromuscular Condition",
+      c_uoncolimmu    ~ "Oncologic/Immunosuppressive Condition",
+      c_premature     ~ "Prematurity (<37 wks)",
+      hospital_status ~ "Final Status",
+      c_los           ~ "Length of stay in days, median (IQR)",
+      inptICU         ~ "ICU Admission",
+      c_suppoxy       ~ "Supplemental Oxygen",
+      c_intubated     ~ "Intubation"),
+    missing  = "ifany",
+    statistic = list(
+      all_continuous()  ~ "{median} ({p25}, {p75})",
+      all_categorical() ~ "{n} ({p}%)")) |>
+  bold_labels() |>
+  remove_footnote_header() |>
+  modify_header(all_stat_cols() ~ "**{level}**") |>
+  as_gt() |>
+  cols_width(
+    label        ~ px(220),
+    everything() ~ px(95)) |>
+  opt_interactive(use_compact_mode=TRUE, page_size_default=11)
+tbl1
+```
+
+---
+
+# Co-detection Patterns
+
+The UpSet plot below visualizes how often HMPV was detected in isolation versus
+each possible combination of the other five respiratory viruses tested in the
+research panel (RSV, adenovirus, influenza, parainfluenza, and
+rhinovirus/enterovirus). Each bar represents a unique combination of detected
+viruses; the dots and connecting lines below the bars indicate which viruses
+are included in that combination. Bars are colored by whether the patient was
+ultimately hospitalized, providing a first visual impression of whether certain
+co-detection patterns are associated with greater illness severity.
+
+Note that this figure is drawn from the **HMPV-positive universe** (before
+the restriction to single co-detections), so all combinations — including those
+with two or more co-pathogens — are visible here. Only the top 15 most common
+combinations are shown.
+
+```{r}
+#| label: fig-upset-hmpv
+#| fig-cap: "Co-detection patterns among all HMPV-positive cases (research-tested), showing the 15 most frequent combinations of co-detected viruses. Bars are colored by hospitalization status. This figure is drawn before the restriction to single co-detections, so combinations involving multiple co-pathogens are included."
+#| echo: false
+
+# ── Named vector mapping display labels to raw column names ───────────────────
+lab.paths <- c(
+  HMPV  = "tmpv",
+  RSV   = "c_rsv_result",
+  Adeno = "tAdeno",
+  Flu   = "anyflu_result",
+  PIV   = "piv14_pos",
+  Rhino = "rhent_pos")
+
+# ── Build a list-column: for each case, which pathogens were detected? ─────────
+#    customFun returns the names of detected pathogens (value == 1) per row;
+#    stored as a list-column because the number of detections varies by case
+customFun <- function(results) names(lab.paths)[results == 1]
+cdc[, lst_detections:=apply(.SD, 1, customFun), .SDcols=unname(lab.paths)]
+
+ggplot(cdc[tmpv==1], aes(x=lst_detections, fill=hospital_status)) +
+  geom_bar(position=position_dodge(width=1)) +
+  scale_x_upset(n_intersections=15) +
+  geom_text(stat="count", aes(label=after_stat(count)),
+            position=position_dodge(width=1), vjust=-0.5, size=3) +
+  scale_y_continuous(name="Number of Cases",
+                     expand=expansion(mult=c(0, 0.12))) +
+  labs(x="Co-detections with HMPV", fill="Final Status")
+```
+
+---
+
+# Illness Severity Odds by Co-detection Status
+
+To assess whether the presence of a viral co-pathogen alongside HMPV is
+independently associated with greater illness severity, we fit a **proportional
+odds (ordinal logistic) regression** model using `MASS::polr()`. The outcome
+is the six-level ordinal severity scale derived above, where higher levels
+indicate more severe illness. An adjusted odds ratio (aOR) greater than 1
+indicates that a co-detection group had higher odds of being at an elevated
+severity level relative to the reference group (HMPV Only).
+
+Compared to a binary hospitalization outcome, the ordinal approach makes fuller
+use of the available clinical information by distinguishing, for example,
+between a patient admitted without supplemental oxygen (Level 2) and one
+admitted to the ICU (Level 4). This is particularly relevant for HMPV, which
+spans a wide range of severity in this dataset.
+
+The proportional odds model assumes that the effect of each covariate is
+constant across all severity thresholds (the *proportional odds assumption*).
+P-values are derived from z-statistics (coefficient / standard error) rather
+than likelihood-ratio tests; this approximation is asymptotically valid and
+appropriate given the dataset size, but should be interpreted with the usual
+caveats for sparse upper categories (Levels 5 and 6).
+
+The model adjusts for the same covariates as the primary analysis: **age** (in
+months, continuous), **preterm birth status** (dichotomous), **any underlying
+medical condition** (dichotomous), and **enrollment site** (categorical).
+
+```{r}
+#| label: tbl-table2
+#| tbl-cap: "Adjusted odds ratios (aOR) for elevated ordinal illness severity by viral co-detection status, from a proportional odds model adjusting for age in months, preterm birth, any underlying medical condition, and enrollment site. An aOR > 1 indicates higher odds of being at a more severe level. The reference group is HMPV Only. Only the co-detection term is shown; covariate coefficients are suppressed."
+
+# ── Fit the proportional odds model ───────────────────────────────────────────
+#    polr() requires Hess=TRUE to compute standard errors; method="logistic"
+#    gives the standard cumulative logit link (equivalent to ordinal logistic)
+fit <- polr(c_severity ~ c_agemonths + c_premature + c_xunderlying +
+    studysite + codetect_status,
+  data   = dat,
+  Hess   = TRUE,
+  method = "logistic")
+
+# ── Summarize the model ────────────────────────────────────────────────────────
+#    exponentiate=TRUE converts log-odds to odds ratios
+#    add_global_p(keep=FALSE) adds p-values from the z-approximation without
+#    retaining the omnibus test row for the whole codetect_status term
+tbl2 <- tbl_regression(
+  fit,
+  exponentiate = TRUE,
+  include      = codetect_status,
+  label        = list(codetect_status ~ NA)) |>
+  add_n(location="level") |>
+  add_global_p(keep=FALSE) |>
+  modify_header(
+    label    ~ "**Detection**",
+    stat_n   ~ "**N**",
+    estimate ~ "**aOR**") |>
+  bold_p()
+tbl2
+```
+
+Two findings from this model are worth highlighting, each with appropriate caution.
+
+**HMPV/Adeno and higher severity odds.** The HMPV/Adeno group showed higher
+adjusted odds of more severe illness. Adenovirus is well-recognized as a cause
+of severe respiratory illness in children, including pneumonia and
+bronchiolitis.[^2] A true co-infection with active adenovirus disease alongside
+HMPV is a plausible driver of greater illness severity, though this analysis
+cannot distinguish co-infection from incidental co-detection. These
+observations are preliminary and descriptive.
+
+**HMPV/RSV and lower severity odds.** The HMPV/RSV group showed lower adjusted
+odds of more severe illness relative to HMPV-alone cases. One possible
+explanation is that a meaningful proportion of RSV-positive results in this
+group reflect residual shedding of a prior RSV infection rather than true
+co-infection with active RSV disease. RSV RNA can remain PCR-detectable for up
+to two weeks, and longer in younger or more severely ill children, raising the
+possibility that a positive RSV result does not reflect an actively contributing
+co-infection.[^3] Notably, HMPV/RSV cases were younger on average than
+HMPV-only cases (@tbl-table1), and younger children are typically more likely
+to experience severe illness — yet the HMPV/RSV group showed lower severity
+odds after adjusting for age. This pattern is consistent with the shedding
+hypothesis: if RSV detections in this group were incidental, their clinical
+trajectory would reflect HMPV illness alone, potentially explaining why their
+severity falls below what their age profile would otherwise predict. The
+sensitivity analysis below examines whether the distribution of underlying
+conditions across groups may also contribute to this finding.
+
+[^2]: Lynch JP III, Fishbein M, Echavarria M. Adenovirus. *Semin Respir Crit Care Med*. 2011;32(4):494–511. doi:10.1055/s-0031-1283287.
+
+[^3]: Munywoki PK, Koech DC, Agoti CN, et al. Influence of age, severity of infection, and co-infection on the duration of respiratory syncytial virus (RSV) shedding. *Epidemiol Infect.* 2015;143(4):804–812. doi:10.1017/S0950268814001393.
+
+---
+
+# Sensitivity Analysis: Patients Without Pre-existing Conditions
+
+In @tbl-table1, the HMPV Only group has a notably higher proportion of patients
+with at least one underlying medical condition compared to the HMPV/RSV group.
+Although the primary model in @tbl-table2 adjusts for underlying conditions as
+a covariate, additive adjustment on the log-odds scale may not fully account
+for its effect if the relationship is non-linear or if underlying conditions
+are a particularly strong driver of severity in the HMPV-only group. To
+evaluate this, we refit the proportional odds model restricting the cohort to
+patients **with no pre-existing conditions** (`c_xunderlying == 0`), and
+compare results side-by-side with the primary model.
+
+If the HMPV/RSV aOR moves appreciably toward 1.0 in the restricted cohort,
+this would suggest that the concentration of underlying conditions in the
+HMPV-only group — rather than co-detection status per se — is a primary driver
+of the severity difference. If the aOR remains low, the result is more robust
+to this potential confound, lending greater relative weight to explanations
+such as residual RSV shedding.
+
+Note that `c_xunderlying` is dropped from the right-hand side of the model in
+this sensitivity analysis, since the restricted cohort has no variation in that
+variable.
+
+```{r}
+#| label: tbl-table3
+#| tbl-cap: "Sensitivity analysis: adjusted odds ratios for elevated ordinal illness severity, restricted to patients with no pre-existing conditions (c_xunderlying == 0). Results are shown side-by-side with the primary model (all patients) for comparison. The reference group is HMPV Only in both models."
+
+# ── Restrict cohort to patients without any underlying conditions ──────────────
+dat.nouc <- dat[c_xunderlying==0]
+
+# ── Refit proportional odds model on restricted cohort ────────────────────────
+#    c_xunderlying is omitted from the right-hand side (no variation in subset)
+fit.nouc <- polr(c_severity ~ c_agemonths + c_premature +
+    studysite + codetect_status,
+  data   = dat.nouc,
+  Hess   = TRUE,
+  method = "logistic")
+
+# ── Summarize restricted model ─────────────────────────────────────────────────
+tbl3.nouc <- tbl_regression(
+  fit.nouc,
+  exponentiate = TRUE,
+  include      = codetect_status,
+  label        = list(codetect_status ~ NA)) |>
+  add_n(location="level") |>
+  add_global_p(keep=FALSE) |>
+  modify_header(
+    label    ~ "**Detection**",
+    stat_n   ~ "**N**",
+    estimate ~ "**aOR**") |>
+  bold_p()
+
+# ── Side-by-side merge with primary model ─────────────────────────────────────
+#    Presents both aORs in a single table for direct comparison; the column
+#    spanners label which model each set of columns belongs to
+tbl_merge(
+  list(tbl2, tbl3.nouc),
+  tab_spanner = c("**All Patients**", "**No Pre-existing Conditions**"))
+```
+
+Two findings from this model are worth highlighting, each with appropriate caution.
+
+**HMPV/Adeno and higher severity odds.** The HMPV/Adeno association with elevated
+severity persists in the restricted cohort. This is consistent with adenovirus
+contributing to illness severity independently of pre-existing conditions, and
+further supports the hypothesis that HMPV/Adeno co-detection reflects a true
+additive viral burden.
+
+**HMPV/RSV and lower severity odds.** If the aOR for HMPV/RSV moves toward 1.0
+in the no-underlying-conditions cohort, this would suggest that the imbalance
+in underlying conditions between HMPV/RSV and HMPV Only cases partially
+explains the finding in the primary model — even after covariate adjustment.
+Conversely, if the aOR remains well below 1.0 and statistically significant,
+the shedding hypothesis gains relative plausibility as an explanation.
+
+---
+
+# Comparison with Amarin et al. (2026)
+
+This analysis was initially designed to replicate the approach of Amarin et al.
+(2026), who examined whether viral co-detections were associated with worse
+clinical outcomes among children with laboratory-confirmed RSV. However, the
+present analysis now departs from their framework in several important ways:
+
+- **Outcome**: Amarin et al. used binary hospitalization as the primary outcome.
+  We use a six-level ordinal severity scale, which captures gradations of
+  illness — from routine discharge through ICU admission, mechanical
+  ventilation, and death — that a binary outcome would collapse.
+- **Study population**: Amarin et al. restricted their cohort to children
+  under 2 years of age enrolled from emergency departments or inpatient units.
+  The present analysis includes all enrolled ages and care settings.
+- **Pathogen**: We study HMPV rather than RSV as the index virus of interest.
+- **Sensitivity analysis**: We add a restriction to patients without pre-existing
+  conditions, which was not part of Amarin et al.'s analytical plan.
+
+Because of these differences, results should not be interpreted as a direct
+replication and are not numerically comparable to Amarin et al.'s findings.
+
+---
+
+# Additional Considerations
+
+- **RSV shedding and cycle-threshold values**: The interpretation of lower
+  severity odds among HMPV/RSV cases as possibly reflecting residual RSV
+  shedding could be further explored using CT values. Higher CT values (lower
+  viral load) in HMPV/RSV cases relative to HMPV-only cases would be consistent
+  with later-stage or co-shedding presentations. CT values for HMPV are
+  available for a subset of sites (Houston, Pittsburgh, Rochester, Vanderbilt);
+  RSV CT values are pending data request. This comparison is noted as a
+  potential extension but is not performed here.
+
+- **Race/ethnicity**: Two variables are available (`c_race_int` [4 categories]
+  and `c_race_int2` [7 categories]). The more granular `c_race_int2` is used
+  throughout.
+
+- **Season 11 (2025–26)** was ongoing at the time of the data pull (April 2026).
+  Cases from this partial season are included but should be interpreted
+  accordingly.
+
+- **Co-detection flag**: The pre-derived variable `c_othercoin6` (any HMPV
+  co-detection, research-tested specimens only) is used as the initial flag
+  for identifying co-detected cases. Individual pathogen columns are then used
+  to assign the specific co-detection group label.
+
+---
+
+*Generated with Quarto and Claude (Anthropic). Contact Ray Pomponio for questions.*
