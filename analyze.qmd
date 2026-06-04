@@ -74,7 +74,7 @@ library(gt)
 library(ggplot2)
 library(ggpubr)
 library(ggupset)
-
+source("wald_function.R")
 set_consort_defaults(txt_gp=gpar(cex=0.6), parse_markup=TRUE)
 theme_set(theme_pubclean(base_size=14))
 ```
@@ -403,10 +403,7 @@ spans a wide range of severity in this dataset.
 
 The proportional odds model assumes that the effect of each covariate is
 constant across all severity thresholds (the *proportional odds assumption*).
-P-values are derived from z-statistics (coefficient / standard error) rather
-than likelihood-ratio tests; this approximation is asymptotically valid and
-appropriate given the dataset size, but should be interpreted with the usual
-caveats for sparse upper categories (Levels 5 and 6).
+P-values are derived from Wald tests; this approximation is asymptotically valid.
 
 The model adjusts for the same covariates as the primary analysis: **age** (in
 months, continuous), **preterm birth status** (dichotomous), **any underlying
@@ -431,11 +428,11 @@ fit <- polr(c_severity ~ c_agemonths + c_premature + c_xunderlying +
 #    retaining the omnibus test row for the whole codetect_status term
 tbl2 <- tbl_regression(
   fit,
+  tidy_fun     = tidy.polr.wald,
   exponentiate = TRUE,
   include      = codetect_status,
   label        = list(codetect_status ~ NA)) |>
   add_n(location="level") |>
-  add_global_p(keep=FALSE) |>
   modify_header(
     label    ~ "**Detection**",
     stat_n   ~ "**N**",
@@ -474,6 +471,53 @@ conditions across groups may also contribute to this finding.
 [^2]: Lynch JP III, Fishbein M, Echavarria M. Adenovirus. *Semin Respir Crit Care Med*. 2011;32(4):494–511. doi:10.1055/s-0031-1283287.
 
 [^3]: Munywoki PK, Koech DC, Agoti CN, et al. Influence of age, severity of infection, and co-infection on the duration of respiratory syncytial virus (RSV) shedding. *Epidemiol Infect.* 2015;143(4):804–812. doi:10.1017/S0950268814001393.
+
+The stacked bar chart below provides a purely descriptive complement to the
+regression results. For each of the three co-detection groups that reached
+statistical significance in @tbl-table2 — HMPV Only, HMPV/Adeno, and
+HMPV/RSV — we compute the marginal percentage of cases at each ordinal severity
+level and display them as filled bars. No model-based adjustment is applied;
+the figure reflects the raw observed distribution of severity within each group.
+The ordering of groups on the x-axis tracks the direction of the regression
+findings: HMPV Only serves as the reference, HMPV/Adeno showed higher severity
+odds, and HMPV/RSV showed lower severity odds. Differences visible here are
+therefore expected to be directionally consistent with @tbl-table2, though not
+adjusted for age, prematurity, underlying conditions, or site.
+
+```{r}
+#| label: fig-severity-by-group
+#| fig-cap: "Observed distribution of ordinal illness severity among the three co-detection groups that reached statistical significance in the proportional odds model. Bars represent the marginal percentage of cases at each severity level within each group. Groups are ordered left to right from reference (HMPV Only) through elevated severity (HMPV/Adeno) to reduced severity (HMPV/RSV). This figure is descriptive and unadjusted."
+#| fig-width: 7
+#| fig-height: 5
+#| echo: false
+
+# ── Subset to the three statistically significant co-detection groups ──────────
+SIG.GROUPS <- c("HMPV Only", "HMPV/Adeno", "HMPV/RSV")
+
+sev.counts <- dat[codetect_status %in% SIG.GROUPS,
+                  .N, by=.(codetect_status, c_severity)]
+sev.counts[, c_severity := factor(c_severity,
+  levels  = 1:6,
+  labels  = c("Discharge", "Hospitalized", "Hospitalized + O2",
+              "ICU", "Ventilated / ECMO", "Died"),
+  ordered = TRUE)]
+sev.counts[, d_perc:=N / sum(N), by=codetect_status]
+sev.counts[, codetect_status:=factor(codetect_status, levels=SIG.GROUPS)]
+
+ggplot(sev.counts,
+       aes(x=codetect_status, y=d_perc, fill=c_severity)) +
+  geom_col(color="black", linewidth=0.3) +
+  geom_text(aes(label=sprintf("%.0f%%", 100 * d_perc)),
+            position=position_stack(vjust=0.5),
+            size=2.8, color="black") +
+  scale_fill_brewer(palette="RdYlBu", direction=-1) +
+  scale_y_continuous(breaks=seq(0, 1, 0.25),
+                     labels=paste0(seq(0, 100, 25), "%"),
+                     name="Marginal Percentage") +
+  scale_x_discrete(name=NULL) +
+  labs(fill="Ordinal Illness Severity") +
+  theme(legend.position="bottom")
+```
 
 ---
 
@@ -518,11 +562,11 @@ fit.nouc <- polr(c_severity ~ c_agemonths + c_premature +
 # ── Summarize restricted model ─────────────────────────────────────────────────
 tbl3.nouc <- tbl_regression(
   fit.nouc,
+  tidy_fun     = tidy.polr.wald,
   exponentiate = TRUE,
   include      = codetect_status,
   label        = list(codetect_status ~ NA)) |>
   add_n(location="level") |>
-  add_global_p(keep=FALSE) |>
   modify_header(
     label    ~ "**Detection**",
     stat_n   ~ "**N**",
