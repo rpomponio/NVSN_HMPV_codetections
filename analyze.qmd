@@ -41,8 +41,9 @@ The target outputs are:
 - An UpSet[^1] plot of the most common co-detection patterns among HMPV-positives.
 - A proportional odds regression summary of adjusted odds ratios for elevated
   illness severity, grouped by co-detection status.
-- A sensitivity analysis restricted to patients without pre-existing conditions,
-  to assess whether underlying conditions confound the primary result.
+- Two sensitivity analyses: (1) restricted to patients without pre-existing
+  conditions, and (2) with surveillance season added as a natural cubic spline,
+  to assess robustness of the primary findings.
 
 [^1]: UpSet plots visualize combinations of categorical attributes (here, which viruses were co-detected).
 
@@ -55,7 +56,9 @@ distinct purpose:
 
 - **`data.table`**: fast data manipulation for large surveillance datasets
 - **`MASS`**: provides `polr()`, which fits the proportional odds (ordinal
-  logistic) regression model used in @tbl-table2 and @tbl-table3
+  logistic) regression model used in @tbl-table2, @tbl-table3, and @tbl-table4
+- **`splines`**: provides `ns()` for natural cubic spline basis expansion of
+  the season covariate, used in @tbl-table4
 - **`consort`**: draws the participant flow diagram
 - **`grid`**: low-level graphics support used internally by `consort`
 - **`gtsummary`**: produces publication-ready summary tables
@@ -67,6 +70,7 @@ distinct purpose:
 ```{r setup}
 library(data.table)
 library(MASS)
+library(splines)
 library(consort)
 library(grid)
 library(gtsummary)
@@ -90,8 +94,8 @@ Before any analysis, several housekeeping steps are required:
    not) used as a grouping variable in @tbl-table1.
 2. **Derive ordinal illness severity** — a six-level ordered outcome ranging
    from routine or ED discharge (Level 1) to death (Level 6). This is the
-   primary outcome in @tbl-table2 and @tbl-table3, and captures gradations of
-   severity that a binary hospitalization flag would obscure.
+   primary outcome in @tbl-table2 through @tbl-table4, and captures gradations
+   of severity that a binary hospitalization flag would obscure.
 3. **Apply human-readable labels** to coded categorical variables (season,
    site, sex, insurance, race/ethnicity).
 4. **Coerce binary (0/1) clinical flags** to integer type.
@@ -127,7 +131,11 @@ cdc[, c_severity := fcase(
     c_hfnc == 1L | c_cpap == 1L),  3L,
   hospital_status == "Hospitalized",  2L,
   default = 1L)]
-cdc[, c_severity := factor(c_severity, levels=1:6, ordered=TRUE)]
+cdc[, c_severity := factor(c_severity,
+  levels  = 1:6,
+  labels  = c("Discharge", "Hospitalized", "Hospitalized + O2",
+              "ICU", "Ventilated / ECMO", "Died"),
+  ordered = TRUE)]
 
 # ── ARI season labels (11 seasons, 2015-16 through 2025-26) ──────────────────
 cdc[, c_ariyear := factor(
@@ -136,6 +144,11 @@ cdc[, c_ariyear := factor(
   labels = c("2015-16", "2016-17", "2017-18", "2018-19", "2019-20",
              "2020-21", "2021-22", "2022-23", "2023-24", "2024-25", "2025-26")
 )]
+
+# ── Integer season index for spline (1 = 2015-16, 11 = 2025-26) ───────────────
+#    ns() requires a numeric covariate; c_ariyear_int is kept separate from
+#    the factor c_ariyear which is used for labeling only
+cdc[, c_ariyear_int:=as.integer(c_ariyear)]
 
 # ── Site labels ───────────────────────────────────────────────────────────────
 #    Site code 7 is not used; Pittsburgh is coded as 8
@@ -397,21 +410,24 @@ severity level relative to the reference group (HMPV Only).
 
 Compared to a binary hospitalization outcome, the ordinal approach makes fuller
 use of the available clinical information by distinguishing, for example,
-between a patient admitted without supplemental oxygen (Level 2) and one
-admitted to the ICU (Level 4). This is particularly relevant for HMPV, which
-spans a wide range of severity in this dataset.
+between a patient admitted without supplemental oxygen (Hospitalized) and one
+admitted to the ICU (ICU). This is particularly relevant for HMPV, which spans
+a wide range of severity in this dataset.
 
 The proportional odds model assumes that the effect of each covariate is
 constant across all severity thresholds (the *proportional odds assumption*).
-P-values are derived from Wald tests; this approximation is asymptotically valid.
+P-values are derived from Wald tests; this approximation is asymptotically
+valid and appropriate given the dataset size, but should be interpreted with
+the usual caveats for sparse upper categories (Ventilated / ECMO and Died).
 
-The model adjusts for the same covariates as the primary analysis: **age** (in
-months, continuous), **preterm birth status** (dichotomous), **any underlying
-medical condition** (dichotomous), and **enrollment site** (categorical).
+The model adjusts for **age** (in months, continuous), **preterm birth
+status** (dichotomous), **any underlying medical condition** (dichotomous),
+and **enrollment site** (categorical). Surveillance season is not adjusted for
+in this model; see @tbl-table4 for the season-adjusted sensitivity analysis.
 
 ```{r}
 #| label: tbl-table2
-#| tbl-cap: "Adjusted odds ratios (aOR) for elevated ordinal illness severity by viral co-detection status, from a proportional odds model adjusting for age in months, preterm birth, any underlying medical condition, and enrollment site. An aOR > 1 indicates higher odds of being at a more severe level. The reference group is HMPV Only. Only the co-detection term is shown; covariate coefficients are suppressed."
+#| tbl-cap: "Adjusted odds ratios (aOR) for elevated ordinal illness severity by viral co-detection status, from a proportional odds model adjusting for age in months, preterm birth, any underlying medical condition, and enrollment site. An aOR > 1 indicates higher odds of being at a more severe level. The reference group is HMPV Only. Surveillance season is not adjusted for in this model; see Table 4. Only the co-detection term is shown; covariate coefficients are suppressed."
 
 # ── Fit the proportional odds model ───────────────────────────────────────────
 #    polr() requires Hess=TRUE to compute standard errors; method="logistic"
@@ -424,8 +440,8 @@ fit <- polr(c_severity ~ c_agemonths + c_premature + c_xunderlying +
 
 # ── Summarize the model ────────────────────────────────────────────────────────
 #    exponentiate=TRUE converts log-odds to odds ratios
-#    add_global_p(keep=FALSE) adds p-values from the z-approximation without
-#    retaining the omnibus test row for the whole codetect_status term
+#    tidy_fun=tidy.polr.wald supplies Wald p-values (see wald_function.R)
+#    include=codetect_status suppresses covariate rows from the output
 tbl2 <- tbl_regression(
   fit,
   tidy_fun     = tidy.polr.wald,
@@ -465,8 +481,8 @@ odds after adjusting for age. This pattern is consistent with the shedding
 hypothesis: if RSV detections in this group were incidental, their clinical
 trajectory would reflect HMPV illness alone, potentially explaining why their
 severity falls below what their age profile would otherwise predict. The
-sensitivity analysis below examines whether the distribution of underlying
-conditions across groups may also contribute to this finding.
+sensitivity analyses below examine whether underlying conditions or unmeasured
+temporal confounding may also contribute to this finding.
 
 [^2]: Lynch JP III, Fishbein M, Echavarria M. Adenovirus. *Semin Respir Crit Care Med*. 2011;32(4):494–511. doi:10.1055/s-0031-1283287.
 
@@ -486,7 +502,7 @@ adjusted for age, prematurity, underlying conditions, or site.
 
 ```{r}
 #| label: fig-severity-by-group
-#| fig-cap: "Observed distribution of ordinal illness severity among the three co-detection groups that reached statistical significance in the proportional odds model. Bars represent the marginal percentage of cases at each severity level within each group. Groups are ordered left to right from reference (HMPV Only) through elevated severity (HMPV/Adeno) to reduced severity (HMPV/RSV). This figure is descriptive and unadjusted."
+#| fig-cap: "Observed distribution of ordinal illness severity among the three co-detection groups that reached statistical significance in the proportional odds model (Table 2). Bars represent the marginal percentage of cases at each severity level within each group. Groups are ordered left to right from reference (HMPV Only) through elevated severity (HMPV/Adeno) to reduced severity (HMPV/RSV). This figure is descriptive and unadjusted."
 #| fig-width: 7
 #| fig-height: 5
 #| echo: false
@@ -496,11 +512,6 @@ SIG.GROUPS <- c("HMPV Only", "HMPV/Adeno", "HMPV/RSV")
 
 sev.counts <- dat[codetect_status %in% SIG.GROUPS,
                   .N, by=.(codetect_status, c_severity)]
-sev.counts[, c_severity := factor(c_severity,
-  levels  = 1:6,
-  labels  = c("Discharge", "Hospitalized", "Hospitalized + O2",
-              "ICU", "Ventilated / ECMO", "Died"),
-  ordered = TRUE)]
 sev.counts[, d_perc:=N / sum(N), by=codetect_status]
 sev.counts[, codetect_status:=factor(codetect_status, levels=SIG.GROUPS)]
 
@@ -521,7 +532,7 @@ ggplot(sev.counts,
 
 ---
 
-# Sensitivity Analysis: Patients Without Pre-existing Conditions
+# Sensitivity Analysis 1: Patients Without Pre-existing Conditions
 
 In @tbl-table1, the HMPV Only group has a notably higher proportion of patients
 with at least one underlying medical condition compared to the HMPV/RSV group.
@@ -546,7 +557,7 @@ variable.
 
 ```{r}
 #| label: tbl-table3
-#| tbl-cap: "Sensitivity analysis: adjusted odds ratios for elevated ordinal illness severity, restricted to patients with no pre-existing conditions (c_xunderlying == 0). Results are shown side-by-side with the primary model (all patients) for comparison. The reference group is HMPV Only in both models."
+#| tbl-cap: "Sensitivity analysis 1: adjusted odds ratios for elevated ordinal illness severity, restricted to patients with no pre-existing conditions (c_xunderlying == 0). Results are shown side-by-side with the primary model (all patients) for comparison. The reference group is HMPV Only in both models."
 
 # ── Restrict cohort to patients without any underlying conditions ──────────────
 dat.nouc <- dat[c_xunderlying==0]
@@ -581,20 +592,78 @@ tbl_merge(
   tab_spanner = c("**All Patients**", "**No Pre-existing Conditions**"))
 ```
 
-Two findings from this model are worth highlighting, each with appropriate caution.
-
 **HMPV/Adeno and higher severity odds.** The HMPV/Adeno association with elevated
-severity persists in the restricted cohort. This is consistent with adenovirus
-contributing to illness severity independently of pre-existing conditions, and
-further supports the hypothesis that HMPV/Adeno co-detection reflects a true
-additive viral burden.
+severity persists in the restricted cohort and strengthens appreciably,
+consistent with adenovirus contributing to illness severity independently of
+pre-existing conditions. This further supports the hypothesis that HMPV/Adeno
+co-detection reflects a true additive viral burden.
 
-**HMPV/RSV and lower severity odds.** If the aOR for HMPV/RSV moves toward 1.0
-in the no-underlying-conditions cohort, this would suggest that the imbalance
-in underlying conditions between HMPV/RSV and HMPV Only cases partially
-explains the finding in the primary model — even after covariate adjustment.
-Conversely, if the aOR remains well below 1.0 and statistically significant,
-the shedding hypothesis gains relative plausibility as an explanation.
+**HMPV/RSV and lower severity odds.** The aOR for HMPV/RSV did not attenuate in
+the no-underlying-conditions cohort; if anything, it strengthened slightly
+relative to the primary model. The imbalance in underlying conditions between
+HMPV/RSV and HMPV Only cases therefore does not explain this finding, lending
+greater relative weight to the residual RSV shedding hypothesis.
+
+---
+
+# Sensitivity Analysis 2: Season-Adjusted Model
+
+The primary model adjusts for enrollment site but treats observations from
+different surveillance seasons as exchangeable. To assess whether unmeasured
+temporal confounding — including the substantial disruption in HMPV circulation
+during and immediately following the COVID-19 pandemic (seasons 2020–21 and
+2021–22) — influences the co-detection findings, we refit the model on the
+full cohort with **surveillance season** added as a natural cubic spline with
+4 degrees of freedom (`ns(c_ariyear_int, df=4)`). This allows the baseline
+severity odds to vary non-linearly across the 11-season study period without
+imposing a linear trend assumption.
+
+```{r}
+#| label: tbl-table4
+#| tbl-cap: "Sensitivity analysis 2: adjusted odds ratios for elevated ordinal illness severity, with surveillance season added as a natural cubic spline (4 df). Results are shown side-by-side with the primary model for comparison. The reference group is HMPV Only in both models."
+
+# ── Refit primary model with season spline on the full cohort ─────────────────
+#    ns(c_ariyear_int, df=4) adds 4 basis columns representing a natural cubic
+#    spline over the integer season index; knots are placed automatically at
+#    the 25th, 50th, and 75th percentiles of c_ariyear_int (seasons 3, 6, 9)
+#    with boundary knots at seasons 1 and 11
+fit.season <- polr(c_severity ~ c_agemonths + c_premature + c_xunderlying +
+    studysite + ns(c_ariyear_int, df=4) + codetect_status,
+  data   = dat,
+  Hess   = TRUE,
+  method = "logistic")
+
+# ── Summarize season-adjusted model ───────────────────────────────────────────
+#    The spline term is suppressed by include=codetect_status; its coefficients
+#    are not individually interpretable and are not shown
+tbl4.season <- tbl_regression(
+  fit.season,
+  tidy_fun     = tidy.polr.wald,
+  exponentiate = TRUE,
+  include      = codetect_status,
+  label        = list(codetect_status ~ NA)) |>
+  add_n(location="level") |>
+  modify_header(
+    label    ~ "**Detection**",
+    stat_n   ~ "**N**",
+    estimate ~ "**aOR**") |>
+  bold_p()
+
+# ── Side-by-side merge with primary model ─────────────────────────────────────
+tbl_merge(
+  list(tbl2, tbl4.season),
+  tab_spanner = c("**Primary Model**", "**Season-Adjusted**"))
+```
+
+Both the HMPV/Adeno and HMPV/RSV effects attenuate after adjusting for season,
+with HMPV/Adeno no longer reaching statistical significance. This attenuation
+warrants careful interpretation. The season spline absorbs not only the direct
+effect of temporal trend on severity, but also any between-season variation in
+the prevalence of co-circulating viruses — adenovirus and RSV do not
+co-circulate with HMPV at equal rates across seasons, so if co-detection
+frequency is itself seasonally structured, the spline may partially absorb the
+co-detection signal, producing attenuation that is statistical in nature rather
+than biological.
 
 ---
 
@@ -613,8 +682,9 @@ present analysis now departs from their framework in several important ways:
   under 2 years of age enrolled from emergency departments or inpatient units.
   The present analysis includes all enrolled ages and care settings.
 - **Pathogen**: We study HMPV rather than RSV as the index virus of interest.
-- **Sensitivity analysis**: We add a restriction to patients without pre-existing
-  conditions, which was not part of Amarin et al.'s analytical plan.
+- **Sensitivity analyses**: We add (1) a restriction to patients without
+  pre-existing conditions and (2) a season-adjusted model using a natural
+  cubic spline, neither of which was part of Amarin et al.'s analytical plan.
 
 Because of these differences, results should not be interpreted as a direct
 replication and are not numerically comparable to Amarin et al.'s findings.
@@ -631,6 +701,11 @@ replication and are not numerically comparable to Amarin et al.'s findings.
   available for a subset of sites (Houston, Pittsburgh, Rochester, Vanderbilt);
   RSV CT values are pending data request. This comparison is noted as a
   potential extension but is not performed here.
+
+- **Proportional odds assumption**: The proportional odds model assumes that
+  the effect of each covariate is constant across all severity thresholds. This
+  assumption is not formally tested here and should be evaluated prior to any
+  manuscript submission, e.g. using a Brant test (`brant::brant()`).
 
 - **Race/ethnicity**: Two variables are available (`c_race_int` [4 categories]
   and `c_race_int2` [7 categories]). The more granular `c_race_int2` is used
