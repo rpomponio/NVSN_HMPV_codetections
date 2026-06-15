@@ -40,10 +40,16 @@ The target outputs are:
   stratified by co-detection status.
 - An UpSet[^1] plot of the most common co-detection patterns among HMPV-positives.
 - A proportional odds regression summary of adjusted odds ratios for elevated
-  illness severity, grouped by co-detection status.
-- Two sensitivity analyses: (1) restricted to patients without pre-existing
-  conditions, and (2) with surveillance season added as a natural cubic spline,
-  to assess robustness of the primary findings.
+  illness severity, grouped by co-detection status, with an RSV-only comparison
+  arm.
+- Three sensitivity analyses: (1) restricted to patients without pre-existing
+  conditions; (2) with surveillance season added as a natural cubic spline;
+  and (3) restricted to cases with CT values below a pre-specified threshold,
+  approximating confirmed active infection.
+- A misclassification tipping-point simulation quantifying how many HMPV/RSV
+  cases would need to be reclassified as HMPV-only for the RSV co-detection
+  effect to lose statistical significance.
+- A placeholder section for infection-order inference using relative CT values.
 
 [^1]: UpSet plots visualize combinations of categorical attributes (here, which viruses were co-detected).
 
@@ -56,9 +62,9 @@ distinct purpose:
 
 - **`data.table`**: fast data manipulation for large surveillance datasets
 - **`MASS`**: provides `polr()`, which fits the proportional odds (ordinal
-  logistic) regression model used in @tbl-table2, @tbl-table3, and @tbl-table4
+  logistic) regression model used in @tbl-table2, @tbl-table3, @tbl-table4, and @tbl-table5
 - **`splines`**: provides `ns()` for natural cubic spline basis expansion of
-  the season covariate, used in @tbl-table4
+  the season covariate, used in @tbl-table4 and @tbl-table5
 - **`consort`**: draws the participant flow diagram
 - **`grid`**: low-level graphics support used internally by `consort`
 - **`gtsummary`**: produces publication-ready summary tables
@@ -96,10 +102,15 @@ Before any analysis, several housekeeping steps are required:
    from routine or ED discharge (Level 1) to death (Level 6). This is the
    primary outcome in @tbl-table2 through @tbl-table4, and captures gradations
    of severity that a binary hospitalization flag would obscure.
-3. **Apply human-readable labels** to coded categorical variables (season,
+3. **Derive minimum CT values per pathogen group** — each pathogen may have
+   multiple CT assays (e.g., RSV-untyped, RSV-A, RSV-B). We take the minimum
+   CT across all available assays for each pathogen, representing the highest
+   observed viral load. This single derived value is used in CT-based
+   restrictions and infection-order analyses.
+4. **Apply human-readable labels** to coded categorical variables (season,
    site, sex, insurance, race/ethnicity).
-4. **Coerce binary (0/1) clinical flags** to integer type.
-5. **Backfill missing specimen dates** from the screen date.
+5. **Coerce binary (0/1) clinical flags** to integer type.
+6. **Backfill missing specimen dates** from the screen date.
 
 ```{r load-data}
 # ── Load CSV (update path as needed) ──────────────────────────────────────────
@@ -136,6 +147,25 @@ cdc[, c_severity := factor(c_severity,
   labels  = c("Discharge", "Hospitalized", "Hospitalized + O2",
               "ICU", "Ventilated / ECMO", "Died"),
   ordered = TRUE)]
+
+# ── Derive minimum CT per pathogen group ──────────────────────────────────────
+#    Where multiple assays exist for the same pathogen (e.g., RSV-untyped,
+#    RSV-A, RSV-B), we take the minimum CT across all assays. The minimum CT
+#    corresponds to the highest observed viral load for that pathogen group,
+#    which is the most conservative representation of active infection.
+#    NA values are ignored; a derived CT is NA only if all component assays
+#    are NA for that case.
+cdc[, d_ct_hmpv  := tmpvCT]
+cdc[, d_ct_adeno := tAdenoCT]
+cdc[, d_ct_rsv   := pmin(trsvCT, trsvACT, trsvBCT,   na.rm=TRUE)]
+cdc[, d_ct_flu   := pmin(tFluApdmH1CT, tFluApdmACT, tFluAH3N2CT,
+                         tFluBCT, tFluBvicCT, tFluCCT,
+                          na.rm=TRUE)]
+cdc[, d_ct_piv   := pmin(tpiv1CT, tpiv2CT, tpiv3CT, tpiv4CT, na.rm=TRUE)]
+cdc[, d_ct_rhent := pmin(trhentCT, trhinoCT, tenteroCT, tevd68CT, na.rm=TRUE)]
+cdc[, d_ct_hcov  := pmin(tCor229eCT, tCorhku1CT, tCorNL63CT, tCorOC43CT,
+                          na.rm=TRUE)]
+cdc[, d_ct_scov2 := tsarscov2ctrp]
 
 # ── ARI season labels (11 seasons, 2015-16 through 2025-26) ──────────────────
 cdc[, c_ariyear := factor(
@@ -232,15 +262,18 @@ cdc[, exc:=fcase(
   tmpv==8, "Sample not research-tested for HMPV",
   is.na(c_finalstatus), "Final status undetermined")]
 
-# ── Among tested cases, flag those without a positive HMPV result ─────────────
+# ── RSV-positive HMPV-negative cases are retained as a comparison arm;
+#    all other HMPV-negative cases are set aside as "Undetected"
 cdc[, rem:=fcase(
-  tmpv==0, "HMPV Negative",
+  tmpv==0 & c_rsv_result!=1, "HMPV Negative (non-RSV)",
+  tmpv==0 & c_rsv_result==1 & c_hothercoin==1, "RSV + non-HMPV virus detected",
   tmpv==2, "HMPV Inconclusive")]
 
 # ── Among HMPV-positives, classify co-detection status ────────────────────────
 cdc[, codetect:=fcase(
-  c_othercoin6==1, "At least 1 other virus detected",
-  default="No other virus was detected")]
+  tmpv==1 & c_othercoin6==0, "HMPV Only",
+  tmpv==1 & c_othercoin6==1, "HMPV + at least 1 other virus detected",
+  default="RSV Only")]
 
 # ── Count how many co-pathogens were detected (to identify multi-co-detections)
 cdc[c_othercoin6==1, codetectn:=rowSums(.SD==1),
@@ -249,15 +282,20 @@ cdc[codetectn > 1, more:="More than 1 other virus detected"]
 
 # ── Final analytic cohort: no exclusions, no ambiguous HMPV result,
 #    and at most one co-detected virus ─────────────────────────────────────────
-dat <- cdc[is.na(exc) & is.na(rem) & (c_othercoin6==0 | is.na(more))]
+dat <- cdc[is.na(exc) & is.na(rem) & codetect!="RSV Only" & is.na(more)]
+
+# ── RSV-only comparison arm: HMPV-negative, RSV-positive, research-tested ──────
+#    Subject to the same exclusion criteria as the primary cohort
+dat.rsv <- cdc[is.na(exc) & is.na(rem) & tmpv==0 & c_rsv_result==1]
+dat.rsv[, codetect_status:="RSV Only"]
 
 consort_plot(
   cdc,
   order = c(Caseid    = "Enrolled from outpatient, emergency, or inpatient",
             exc       = "**Excluded**",
-            Caseid    = "Tested for human metapneumovirus",
+            Caseid    = "Tested for HMPV/RSV",
             rem       = "**Undetected**",
-            Caseid    = "Human metapneumovirus detected by research testing",
+            Caseid    = "HMPV/RSV detected by research testing",
             codetect  = "",
             more      = "**Dropped**",
             Caseid    = "Analyzed"),
@@ -300,6 +338,8 @@ dat[, codetect_status:=fcase(
   piv14_pos==1, "HMPV/PIV",
   c_rsv_result==1, "HMPV/RSV",
   rhent_pos==1, "HMPV/HRV",
+  hcov_pos==1, "HMPV/HCoV",
+  c_sarscov2==1, "HMPV/SARS-Cov-2",
   default="HMPV Only")]
 
 # ── Variables to include in Table 1, in display order ────────────────────────
@@ -339,7 +379,7 @@ tbl1 <- tbl_summary(
       all_categorical() ~ "{n} ({p}%)")) |>
   bold_labels() |>
   remove_footnote_header() |>
-  modify_header(all_stat_cols() ~ "**{level}**") |>
+  modify_header(all_stat_cols() ~ "**{level}**\n**(n={n})**") |>
   as_gt() |>
   cols_width(
     label        ~ px(220),
@@ -378,7 +418,9 @@ lab.paths <- c(
   Adeno = "tAdeno",
   Flu   = "anyflu_result",
   PIV   = "piv14_pos",
-  Rhino = "rhent_pos")
+  Rhino = "rhent_pos",
+  HCoV  = "hcov_pos",
+  `SARS-CoV-2` = "c_sarscov2")
 
 # ── Build a list-column: for each case, which pathogens were detected? ─────────
 #    customFun returns the names of detected pathogens (value == 1) per row;
@@ -429,12 +471,19 @@ in this model; see @tbl-table4 for the season-adjusted sensitivity analysis.
 #| label: tbl-table2
 #| tbl-cap: "Adjusted odds ratios (aOR) for elevated ordinal illness severity by viral co-detection status, from a proportional odds model adjusting for age in months, preterm birth, any underlying medical condition, and enrollment site. An aOR > 1 indicates higher odds of being at a more severe level. The reference group is HMPV Only. Surveillance season is not adjusted for in this model; see Table 4. Only the co-detection term is shown; covariate coefficients are suppressed."
 
+# ── Build combined dataset with RSV-only arm ──────────────────────────────────
+dat.combined <- rbind(dat, dat.rsv, fill=TRUE)
+dat.combined[, codetect_status:=factor(
+  codetect_status,
+  levels=c("HMPV Only", "HMPV/Adeno", "HMPV/Flu", "HMPV/PIV",
+           "HMPV/RSV", "HMPV/HRV", "RSV Only"))]
+
 # ── Fit the proportional odds model ───────────────────────────────────────────
 #    polr() requires Hess=TRUE to compute standard errors; method="logistic"
 #    gives the standard cumulative logit link (equivalent to ordinal logistic)
 fit <- polr(c_severity ~ c_agemonths + c_premature + c_xunderlying +
     studysite + codetect_status,
-  data   = dat,
+  data   = dat.combined,
   Hess   = TRUE,
   method = "logistic")
 
@@ -482,7 +531,7 @@ hypothesis: if RSV detections in this group were incidental, their clinical
 trajectory would reflect HMPV illness alone, potentially explaining why their
 severity falls below what their age profile would otherwise predict. The
 sensitivity analyses below examine whether underlying conditions or unmeasured
-temporal confounding may also contribute to this finding.
+temporal confounding may also contribute to this finding. The RSV-only arm provides an additional reference: if HMPV/RSV cases resemble RSV-only cases in their severity distribution, this would further support RSV as the active pathogen in those co-detections.
 
 [^2]: Lynch JP III, Fishbein M, Echavarria M. Adenovirus. *Semin Respir Crit Care Med*. 2011;32(4):494–511. doi:10.1055/s-0031-1283287.
 
@@ -508,9 +557,9 @@ adjusted for age, prematurity, underlying conditions, or site.
 #| echo: false
 
 # ── Subset to the three statistically significant co-detection groups ──────────
-SIG.GROUPS <- c("HMPV Only", "HMPV/Adeno", "HMPV/RSV")
+SIG.GROUPS <- c("HMPV Only", "HMPV/Flu", "HMPV/PIV", "RSV Only")
 
-sev.counts <- dat[codetect_status %in% SIG.GROUPS,
+sev.counts <- dat.combined[codetect_status %in% SIG.GROUPS,
                   .N, by=.(codetect_status, c_severity)]
 sev.counts[, d_perc:=N / sum(N), by=codetect_status]
 sev.counts[, codetect_status:=factor(codetect_status, levels=SIG.GROUPS)]
@@ -560,7 +609,7 @@ variable.
 #| tbl-cap: "Sensitivity analysis 1: adjusted odds ratios for elevated ordinal illness severity, restricted to patients with no pre-existing conditions (c_xunderlying == 0). Results are shown side-by-side with the primary model (all patients) for comparison. The reference group is HMPV Only in both models."
 
 # ── Restrict cohort to patients without any underlying conditions ──────────────
-dat.nouc <- dat[c_xunderlying==0]
+dat.nouc <- dat.combined[c_xunderlying==0]
 
 # ── Refit proportional odds model on restricted cohort ────────────────────────
 #    c_xunderlying is omitted from the right-hand side (no variation in subset)
@@ -629,7 +678,7 @@ imposing a linear trend assumption.
 #    with boundary knots at seasons 1 and 11
 fit.season <- polr(c_severity ~ c_agemonths + c_premature + c_xunderlying +
     studysite + ns(c_ariyear_int, df=4) + codetect_status,
-  data   = dat,
+  data   = dat.combined,
   Hess   = TRUE,
   method = "logistic")
 
@@ -667,6 +716,230 @@ than biological.
 
 ---
 
+# Sensitivity Analysis 3: CT-Restricted Cohort
+
+The analyses above use any positive PCR result to define co-detection status,
+regardless of viral load. A positive result at high cycle-threshold (CT) values
+may reflect low-level or residual viral RNA rather than active infection. To
+approximate a cohort of **confirmed active infections**, we restrict all
+detections to cases where the minimum CT value for each detected pathogen is
+below a pre-specified threshold of **CT ≤ 30**. This threshold is commonly used
+in the literature as a pragmatic cutoff for active replication, though it is
+acknowledged to be arbitrary; a supplementary analysis at CT ≤ 35 is
+recommended prior to manuscript submission.
+
+CT values are available for four sites (Houston, Pittsburgh, Rochester, and
+Vanderbilt). HCoV CT values are also available for Kansas City; however, for
+consistency across all pathogens, the CT restriction is applied only to cases
+from the four primary CT sites. Cases from Cincinnati and Seattle are excluded
+from this sensitivity analysis. Within the four CT sites, cases are further
+excluded if the CT value for any *detected* pathogen is missing, since a
+missing CT cannot be classified as active or residual.
+
+For the HMPV/RSV group specifically, the CT restriction requires **both**
+HMPV CT ≤ 30 **and** RSV CT ≤ 30, which operationally defines true dual
+active infection. The shedding hypothesis predicts that this restriction
+should attenuate or eliminate the paradoxically low severity odds seen in
+the primary model — if RSV was merely shedding in many HMPV/RSV cases, those
+cases will be removed, leaving only cases where both viruses are plausibly
+active.
+
+```{r}
+#| label: tbl-table5
+#| tbl-cap: "Sensitivity analysis 3: adjusted odds ratios for elevated ordinal illness severity, restricted to cases from CT-reporting sites (Houston, Pittsburgh, Rochester, Vanderbilt) where all detected pathogens have CT ≤ 30. This approximates a cohort of confirmed active infections. An RSV-only arm is included with the same CT restriction applied to RSV CT. Results are shown side-by-side with the primary model (all sites, no CT restriction) for comparison."
+
+# ── CT threshold constant ─────────────────────────────────────────────────────
+CT.THRESHOLD <- 30L
+
+# ── CT-reporting sites ────────────────────────────────────────────────────────
+CT.SITES <- c("Houston", "Pittsburgh", "Rochester", "Vanderbilt")
+
+# ── Helper: for a given detection flag and its minimum CT, return TRUE if
+#    the case either (a) did not detect the pathogen, or (b) detected it
+#    with CT <= threshold. Cases with a positive result but missing CT are
+#    excluded (cannot confirm active vs. residual).
+active.or.absent <- function(detected, ct, threshold) {
+  fifelse(detected==1L,
+    !is.na(ct) & ct <= threshold,
+    TRUE)
+}
+
+# ── Apply CT restriction to combined cohort ───────────────────────────────────
+dat.ct <- dat.combined[
+  studysite %in% CT.SITES &
+  active.or.absent(tmpv,          d_ct_hmpv,  CT.THRESHOLD) &
+  active.or.absent(tAdeno,        d_ct_adeno, CT.THRESHOLD) &
+  active.or.absent(anyflu_result, d_ct_flu,   CT.THRESHOLD) &
+  active.or.absent(piv14_pos,     d_ct_piv,   CT.THRESHOLD) &
+  active.or.absent(c_rsv_result,  d_ct_rsv,   CT.THRESHOLD) &
+  active.or.absent(rhent_pos,     d_ct_rhent, CT.THRESHOLD) &
+  active.or.absent(hcov_pos,      d_ct_hcov,  CT.THRESHOLD)]
+
+# ── Drop codetect_status levels with fewer than MIN.N cases after CT restriction
+MIN.N <- 10L
+keep.levels <- dat.ct[, .N, by=codetect_status][N >= MIN.N, codetect_status]
+dat.ct <- dat.ct[codetect_status %in% keep.levels]
+dat.ct[, codetect_status:=droplevels(codetect_status)]
+dat.ct[, studysite:=droplevels(studysite)]
+
+# ── Fit CT-restricted model ───────────────────────────────────────────────────
+#    studysite will drop to 4 levels; polr() handles this automatically.
+#    Note that the reference level of codetect_status is still "HMPV Only".
+fit.ct <- polr(c_severity ~ c_agemonths + c_premature + c_xunderlying +
+    studysite + codetect_status,
+  data   = dat.ct,
+  Hess   = TRUE,
+  method = "logistic")
+
+tbl5.ct <- tbl_regression(
+  fit.ct,
+  tidy_fun     = tidy.polr.wald,
+  exponentiate = TRUE,
+  include      = codetect_status,
+  label        = list(codetect_status ~ NA)) |>
+  add_n(location="level") |>
+  modify_header(
+    label    ~ "**Detection**",
+    stat_n   ~ "**N**",
+    estimate ~ "**aOR**") |>
+  bold_p()
+
+tbl_merge(
+  list(tbl2, tbl5.ct),
+  tab_spanner = c("**Primary Model (All Sites)**",
+                  "**CT ≤ 30 (4 Sites)**"))
+```
+
+The key comparison is the HMPV/RSV aOR before and after the CT restriction.
+If the aOR moves toward 1.0 or changes sign in the CT-restricted cohort, this
+supports the interpretation that many HMPV/RSV cases in the primary cohort
+involved residual RSV shedding rather than active dual infection, and that
+restricting to confirmed active co-infections reveals a null or attenuated
+effect. Conversely, if the aOR remains low even among CT ≤ 30 cases, the
+finding cannot be explained by shedding alone.
+
+---
+
+# Misclassification Tipping-Point Simulation
+
+The primary model shows that HMPV/RSV co-detection is associated with
+significantly *lower* illness severity compared to HMPV alone. If some of
+these co-detections represent residual RSV shedding — i.e., the patient has
+active HMPV infection and incidentally detectable but clinically inactive RSV
+RNA — then those cases are effectively misclassified as co-detections when
+they should be HMPV-only. The tipping-point simulation quantifies how many
+such misclassifications it would take for the HMPV/RSV coefficient to lose
+statistical significance (p ≥ 0.05) in the season-adjusted model (@tbl-table4),
+where the effect is more attenuated and thus the threshold is more clinically
+meaningful.
+
+The simulation proceeds as follows: HMPV/RSV cases are randomly reordered,
+and cases are sequentially reclassified to HMPV Only one at a time. After each
+reclassification, the season-adjusted model is refit and the Wald p-value for
+the HMPV/RSV term is extracted. The smallest *k* at which p ≥ 0.05 is the
+tipping point for that random ordering. This is repeated across many random
+orderings to obtain a distribution of tipping points, expressed as a count
+and percentage of the total HMPV/RSV group.
+
+```{r}
+#| label: tbl-tipping
+#| tbl-cap: "Misclassification tipping-point simulation: distribution of the number and percentage of HMPV/RSV cases that would need to be reclassified as HMPV Only for the HMPV/RSV Wald p-value to reach 0.05 in the season-adjusted model. Results are summarized over 200 random orderings of the HMPV/RSV cases."
+
+set.seed(1818)
+N.SIM      <- 200L
+rsv.idx    <- which(dat$codetect_status=="HMPV/RSV")
+n.rsv      <- length(rsv.idx)
+tip.list   <- vector("list", N.SIM)
+
+for (s in seq_len(N.SIM)) {
+  rand.order <- sample(rsv.idx)
+  tip.k      <- NA_integer_
+
+  # ── Start search at 5% of HMPV/RSV cases to skip implausibly low tipping points
+  k.start <- max(1L, floor(n.rsv * 0.05))
+  for (k in k.start:length(rand.order)) {
+    dat.sim <- copy(dat)
+    dat.sim[rand.order[seq_len(k)], codetect_status:="HMPV Only"]
+
+    fit.sim <- tryCatch(
+      polr(c_severity ~ c_agemonths + c_premature + c_xunderlying +
+             studysite + ns(c_ariyear_int, df=4) + codetect_status,
+           data=dat.sim, Hess=TRUE, method="logistic"),
+      error=function(e) NULL)
+
+    if (is.null(fit.sim)) next
+
+    coef.mat <- coef(summary(fit.sim))
+    rsv.row  <- grep("HMPV/RSV", rownames(coef.mat), fixed=TRUE)
+
+    if (length(rsv.row)==0L) { tip.k <- k; break }
+
+    p.val <- 2 * pnorm(-abs(coef.mat[rsv.row, "Value"] /
+                              coef.mat[rsv.row, "Std. Error"]))
+    if (p.val >= 0.05) { tip.k <- k; break }
+  }
+  tip.list[[s]] <- data.table(sim=s, tip.k=tip.k)
+}
+
+tip.dt <- rbindlist(tip.list)
+
+# ── Summarize tipping-point distribution ──────────────────────────────────────
+tip.summary <- tip.dt[, .(
+  d_tip_median = median(tip.k,              na.rm=TRUE),
+  d_tip_q25    = quantile(tip.k, 0.25,      na.rm=TRUE),
+  d_tip_q75    = quantile(tip.k, 0.75,      na.rm=TRUE),
+  d_tip_pct    = median(tip.k / n.rsv * 100, na.rm=TRUE)
+)]
+
+# ── Display ───────────────────────────────────────────────────────────────────
+knitr::kable(
+  data.frame(
+    Statistic = c("Total HMPV/RSV cases",
+                  "Median tipping point (cases)",
+                  "IQR (cases)",
+                  "Median tipping point (% of HMPV/RSV)"),
+    Value = c(
+      n.rsv,
+      tip.summary$d_tip_median,
+      sprintf("%g – %g", tip.summary$d_tip_q25, tip.summary$d_tip_q75),
+      sprintf("%.1f%%", tip.summary$d_tip_pct))),
+  col.names = c("", ""),
+  align = "lr")
+```
+
+A low tipping-point percentage (e.g., < 10–15% of HMPV/RSV cases) would
+indicate that the result is fragile — a small proportion of misclassified
+shedding cases would be sufficient to explain the finding. A high percentage
+would suggest the result is robust to plausible levels of misclassification.
+
+---
+
+# Placeholder: Infection-Order Inference from Relative CT Values
+
+*This section is reserved for a planned analysis using relative CT values to
+approximate the order in which HMPV and RSV infections were acquired.*
+
+The core idea is that within HMPV/RSV co-detected cases, the difference in
+CT values between the two viruses (RSV CT − HMPV CT) reflects their relative
+viral loads at the time of specimen collection. A case where RSV CT is
+substantially higher than HMPV CT (lower RSV load relative to HMPV) is
+consistent with RSV having been acquired first and now declining, while HMPV
+is at or near peak replication — i.e., RSV is the "older" infection. The
+reverse pattern (HMPV CT much higher than RSV CT) would suggest HMPV was
+acquired first.
+
+This analysis requires a pre-specified CT difference threshold to classify
+infection order; sensitivity across multiple thresholds (e.g., differences of
+3, 5, and 10 CT units) will be examined. The primary output will be a
+descriptive summary of illness severity stratified by inferred infection order,
+to motivate the grant application hypothesis that the timing and directionality
+of co-infection — not merely co-detection — drives clinical outcomes.
+
+*Implementation is pending finalization of the CT restriction approach in
+@tbl-table5 and discussion with the PI regarding threshold selection.*
+
+---
+
 # Comparison with Amarin et al. (2026)
 
 This analysis was initially designed to replicate the approach of Amarin et al.
@@ -683,8 +956,9 @@ present analysis now departs from their framework in several important ways:
   The present analysis includes all enrolled ages and care settings.
 - **Pathogen**: We study HMPV rather than RSV as the index virus of interest.
 - **Sensitivity analyses**: We add (1) a restriction to patients without
-  pre-existing conditions and (2) a season-adjusted model using a natural
-  cubic spline, neither of which was part of Amarin et al.'s analytical plan.
+  pre-existing conditions, (2) a season-adjusted model using a natural cubic
+  spline, and (3) a CT-restricted cohort approximating confirmed active
+  infections, none of which were part of Amarin et al.'s analytical plan.
 
 Because of these differences, results should not be interpreted as a direct
 replication and are not numerically comparable to Amarin et al.'s findings.
@@ -693,14 +967,19 @@ replication and are not numerically comparable to Amarin et al.'s findings.
 
 # Additional Considerations
 
-- **RSV shedding and cycle-threshold values**: The interpretation of lower
-  severity odds among HMPV/RSV cases as possibly reflecting residual RSV
-  shedding could be further explored using CT values. Higher CT values (lower
-  viral load) in HMPV/RSV cases relative to HMPV-only cases would be consistent
-  with later-stage or co-shedding presentations. CT values for HMPV are
-  available for a subset of sites (Houston, Pittsburgh, Rochester, Vanderbilt);
-  RSV CT values are pending data request. This comparison is noted as a
-  potential extension but is not performed here.
+- **CT threshold (CT ≤ 30)**: This cutoff is pragmatic and arbitrary. A
+  supplementary analysis at CT ≤ 35 is recommended before manuscript
+  submission. The biological basis and limitations of the threshold should
+  be addressed explicitly in the Methods section of any manuscript.
+
+- **CT site restriction**: The CT-restricted cohort (Table 5) is limited to
+  four sites (Houston, Pittsburgh, Rochester, Vanderbilt) and should not be
+  treated as representative of the full seven-site NVSN network.
+
+- **Minimum CT derivation**: For pathogens with multiple assays, the minimum
+  CT across all available assays is used, representing the highest observed
+  viral load. NA values are ignored; a derived CT is NA only if all component
+  assays are NA.
 
 - **Proportional odds assumption**: The proportional odds model assumes that
   the effect of each covariate is constant across all severity thresholds. This
@@ -711,7 +990,7 @@ replication and are not numerically comparable to Amarin et al.'s findings.
   and `c_race_int2` [7 categories]). The more granular `c_race_int2` is used
   throughout.
 
-- **Season 11 (2025–26)** was ongoing at the time of the data pull (April 2026).
+- **Season 11 (2025–26)** was ongoing at the time of the data pull (June 2026).
   Cases from this partial season are included but should be interpreted
   accordingly.
 
