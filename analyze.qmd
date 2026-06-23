@@ -366,7 +366,7 @@ dat[, codetect_status:=fcase(
 dat[, codetect_status:=factor(
   codetect_status,
   levels=c("HMPV Only", "HMPV/Adeno", "HMPV/Flu", "HMPV/PIV",
-           "HMPV/RSV", "HMPV/HRV"))]
+           "HMPV/RSV", "HMPV/HRV", "HMPV/HCoV", "HMPV/SARS-Cov-2"))]
 
 # ── Variables to include in Table 1, in display order ────────────────────────
 tbl1.vars <- c(
