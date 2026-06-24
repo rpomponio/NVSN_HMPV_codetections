@@ -293,9 +293,6 @@ cdc[tmpv==1, codetect:=fcase(
   hcov_pos==1, "At least 1 other virus detected")]
 cdc[is.na(codetect), mis:="Unable to verify codetection status"]
 
-# send QC list to Leah Goldstein (if necessary)
-# cdc[tmpv==1 & is.na(codetect), .N]
-
 # ── Count how many co-pathogens were detected (to identify multi-co-detections)
 cdc[codetect=="At least 1 other virus detected", codetectn:=rowSums(
   .SD==1, na.rm=TRUE),
@@ -304,7 +301,7 @@ cdc[codetect=="At least 1 other virus detected", codetectn:=rowSums(
 cdc[codetectn > 1, more:="More than 1 other virus detected"]
 
 # ── Primary analytic cohort: HMPV-positive, no exclusions, single co-detection
-dat <- cdc[is.na(exc) & is.na(mis) & (c_othercoin6==0 | is.na(more))]
+dat <- cdc[is.na(exc) & is.na(mis) & is.na(more)]
 
 # ── RSV-only comparison arm (Sensitivity 4 only) ──────────────────────────────
 #    HMPV-negative, RSV-positive, research-tested, same exclusion criteria
@@ -415,6 +412,17 @@ tbl1 <- tbl_summary(
     everything() ~ px(100)) |>
   opt_interactive(use_compact_mode=TRUE, page_size_default=12)
 tbl1
+```
+
+---
+
+```{r QC}
+# send QC list to Leah Goldstein (if necessary)
+sel.cols <- c(caseid="Caseid", cdc_codetect="c_othercoin6",
+              local_codetect="codetect", local_comments="mis", lab.paths)
+sel <- cdc[is.na(exc), ..sel.cols]
+names(sel) <- names(sel.cols)
+# fwrite(sel, "all_mpvPositive_analyticalSample_withCodetectionLabels.csv")
 ```
 
 ---
