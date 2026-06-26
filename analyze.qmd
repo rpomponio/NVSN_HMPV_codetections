@@ -416,17 +416,6 @@ tbl1
 
 ---
 
-```{r QC}
-# send QC list to Leah Goldstein (if necessary)
-sel.cols <- c(caseid="Caseid", cdc_codetect="c_othercoin6",
-              local_codetect="codetect", local_comments="mis", lab.paths)
-sel <- cdc[is.na(exc), ..sel.cols]
-names(sel) <- names(sel.cols)
-# fwrite(sel, "all_mpvPositive_analyticalSample_withCodetectionLabels.csv")
-```
-
----
-
 # Co-detection Patterns
 
 The UpSet plot below visualizes how often HMPV was detected in isolation versus
@@ -473,6 +462,17 @@ ggplot(cdc[codetectn > 0], aes(x=lst_detections, fill=hospital_status)) +
   scale_y_continuous(name="Number of Cases",
                      expand=expansion(mult=c(0, 0.12))) +
   labs(x="Co-detections with HMPV", fill="Final Status")
+```
+
+---
+
+```{r QC}
+# send QC list to Leah Goldstein (if necessary)
+sel.cols <- c(caseid="Caseid", cdc_codetect="c_othercoin6",
+              local_codetect="codetect", local_comments="mis", lab.paths)
+sel <- cdc[is.na(exc), ..sel.cols]
+names(sel) <- names(sel.cols)
+# fwrite(sel, "all_mpvPositive_analyticalSample_withCodetectionLabels.csv")
 ```
 
 ---
