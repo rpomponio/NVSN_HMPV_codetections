@@ -160,24 +160,28 @@ build.prelim <- function(dat, design, ct.threshold=CT.THRESHOLD) {
       out[i, d_partner_ct        :=get(paste0("d_", pth, "_ct"))]
       out[i, d_partner_inconclusive:=(get(paste0("d_", pth, "_result")) == "Inconclusive")]
     }
-    out[, d_partner_fails_ct:=fcase(
-      d_n_codetect_lab == 1 & (is.na(d_partner_ct) | d_partner_ct > ct.threshold), TRUE,
-      d_n_codetect_lab == 1 & d_partner_inconclusive,                              TRUE,
+    # replace the single d_partner_fails_ct assignment with two flags:
+    out[, d_partner_ct_missing:=fcase(
+      d_n_codetect_lab == 1 & (is.na(d_partner_ct) | d_partner_inconclusive), TRUE,
+      default=FALSE)]
+    
+    out[, d_partner_ct_high:=fcase(
+      d_n_codetect_lab == 1 & !is.na(d_partner_ct) & d_partner_ct > ct.threshold, TRUE,
       default=FALSE)]
     
     if (design == "B_restricted") {
-      # B: drop the case if partner fails CT screen
-      out <- out[d_partner_fails_ct == FALSE]
+      # B: drop on either reason
+      out <- out[d_partner_ct_missing == FALSE & d_partner_ct_high == FALSE]
       out[, d_codetect:=d_codetect_lab]
       
     } else if (design == "C_reclassify") {
-      # C: retain the case; reclassify partner failure to hmpv-only
-      # d_reclassified flags cases moved from co-detection to monoinfection
-      out[, d_reclassified:=d_partner_fails_ct]
-      out[d_partner_fails_ct == TRUE,  d_codetect:="hmpv-only"]
-      out[d_partner_fails_ct == FALSE, d_codetect:=d_codetect_lab]
-      cat(sprintf("Design C: %d co-detections reclassified to hmpv-only after CT screen\n",
-                  sum(out$d_reclassified)))
+      n.dropped.missing <- sum(out$d_partner_ct_missing)
+      out <- out[d_partner_ct_missing == FALSE]
+      out[, d_reclassified:=d_partner_ct_high]
+      out[d_partner_ct_high == TRUE,  d_codetect:="hmpv-only"]
+      out[d_partner_ct_high == FALSE, d_codetect:=d_codetect_lab]
+      cat(sprintf("Design C: %d reclassified (CT >%d); %d dropped (CT missing or inconclusive)\n",
+                  sum(out$d_reclassified), ct.threshold, n.dropped.missing))
     }
   }
   
