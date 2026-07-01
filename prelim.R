@@ -132,7 +132,13 @@ dat[, d_codetect_lab:=fcase(
 # but verify d_codetect_lab is never NA among d_n_codetect_lab==1 rows before proceeding
 stopifnot(!any(dat[d_n_codetect_lab == 1, is.na(d_codetect_lab)]))
 
+dat[, d_codetect_lab:=factor(d_codetect_lab, c("hmpv-only", names(PATHOGENS)))]
+dat[, d_codetect_lab:=droplevels(d_codetect_lab)]
+
 # ── Cohort assembly by design ──────────────────────────────────────────────────
+# d_hospitalized derived here on dat so it is available on both dat and prelim
+# (prelim is a copy/subset of dat; generateTables.R uses it on dat for the overall column)
+dat[, d_hospitalized:=fifelse(c_finalstatus == 1, "Hospitalized", "Not Hospitalized")]
 
 if (DESIGN == "A_unrestricted") {
   
@@ -189,11 +195,9 @@ cat(sprintf("Design: %s | N retained: %d (of %d HMPV-positive at CT sites)\n",
             DESIGN, nrow(prelim), nrow(dat)))
 table(prelim$d_codetect, exclude=NULL)
 
-# ── Outcome: 5/6-level ordinal illness severity ───────────────────────────────
-# NOTE: "hospital_status" derived from c_finalstatus since the raw extract has no variable by that name.
-#   c_finalstatus: 1=Inpatient, 2=ED, 3=Outpatient, 5=Urgent Care
-prelim[, d_hospitalized:=fifelse(c_finalstatus == 1, "Hospitalized", "Not Hospitalized")]
-
+# ── Outcome: 6-level ordinal illness severity ────────────────────────────────
+# c_finalstatus: 1=Inpatient, 2=ED, 3=Outpatient, 5=Urgent Care
+# d_hospitalized is derived on dat above; available here via prelim as a copy/subset
 prelim[, d_severity:=fcase(
   c_died      == 1L, 6L,
   c_intubated == 1L, 5L,

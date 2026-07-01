@@ -12,17 +12,8 @@ library(gtsummary)
 
 # runs data ingest, cohort assembly, and all d_ derivations;
 # produces: dat (pre-CT, HMPV-positive), prelim (analytic cohort), DESIGN, CT.THRESHOLD
+# d_hospitalized and d_codetect_lab (factor) are derived on dat inside prelim.R
 source("prelim.R")
-
-# ── Variables needed on dat but only derived on prelim in prelim.R ────────────
-
-# d_hospitalized is constructed from c_finalstatus on prelim inside prelim.R;
-# re-derive here on the full pre-CT dat for use in Table 1 overall/excluded rows
-dat[, d_hospitalized:=fifelse(c_finalstatus == 1, "Hospitalized", "Not Hospitalized")]
-
-# d_codetect_lab is character on dat; factor for display, retaining all observed levels
-dat[, d_codetect_lab:=factor(d_codetect_lab, c("hmpv-only", names(PATHOGENS)))]
-dat[, d_codetect_lab:=droplevels(d_codetect_lab)]
 
 # ── CT inclusion flag ─────────────────────────────────────────────────────────
 # TRUE  = case is in prelim (proceeds to downstream analysis under active DESIGN)
