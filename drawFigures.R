@@ -42,20 +42,13 @@ N.DESIGN        <- nrow(prelim.design)
 
 fmt.n <- function(n) formatC(n, format="d", big.mark=",")
 
-# design-specific partner CT label and box fill
-if (DESIGN == "B_restricted") {
-  N.EXCL.PARTNER <- N.AFTER.HMPV.CT - N.DESIGN
-  partner.label  <- sprintf(
-    "Excluded: partner CT >%d,\nmissing, or inconclusive\nN = %s",
-    CT.THRESHOLD, fmt.n(N.EXCL.PARTNER))
-  partner.fill   <- "#fce8e8"   # red-tinted: exclusion
-} else {
+# N.DROPPED.PARTNER: cases lost at the partner CT step in both designs
+#   Design B: all partner CT failures (missing, inconclusive, >threshold)
+#   Design C: only missing/inconclusive (CT >threshold is reclassified, not dropped)
+N.DROPPED.PARTNER <- N.AFTER.HMPV.CT - N.DESIGN
+
+if (DESIGN == "C_reclassify")
   N.RECLASSIFIED <- sum(prelim.design$d_reclassified)
-  partner.label  <- sprintf(
-    "Reclassified to HMPV-only:\npartner CT >%d,\nN = %s",
-    CT.THRESHOLD, fmt.n(N.RECLASSIFIED))
-  partner.fill   <- "#fef9e7"   # yellow-tinted: reclassification (not exclusion)
-}
 
 # ── Box layout ─────────────────────────────────────────────────────────────────
 # coordinate system: x=[0, 11.5], y=[2.0, 11.2] (y=11.2 at top)
@@ -83,7 +76,7 @@ mb <- function(id, xc, yc, w, h, fill, label) {
              fill=fill, label=label)
 }
 
-boxes <- rbindlist(list(
+shared.boxes <- list(
   # shared enrollment funnel (3 boxes, top to bottom)
   mb("b_sites",   4.2, 10.5, W.M, H,  CLR.MAIN,
      sprintf("Enrolled: 4 CT-reporting sites\nN = %s", fmt.n(N.CT.SITES))),
@@ -102,22 +95,52 @@ boxes <- rbindlist(list(
   mb("b_arm_a",   1.8,  5.2, W.A, H,  CLR.A,
      sprintf("Analysis A\n(Unrestricted)\nN = %s", fmt.n(N.DAT))),
   
-  # right fork arm: CT restriction
+  # right fork arm: CT restriction (shared through HMPV CT step)
   mb("b_hmpv_ct", 6.8,  5.2, W.A, H,  CLR.MAIN,
      sprintf("HMPV CT \u2264 %d\nN = %s", CT.THRESHOLD, fmt.n(N.AFTER.HMPV.CT))),
   mb("e_hmpvct",  9.8,  5.9, W.E, HE, CLR.EXCL,
-     sprintf("Excluded: HMPV CT >%d\nor missing\nN = %s", CT.THRESHOLD, fmt.n(N.EXCL.HMPV.CT))),
-  
-  # partner CT step (design-specific)
-  mb("e_partner", 9.8,  3.9, W.E, HE, partner.fill, partner.label),
-  mb("b_design",  6.8,  3.2, W.A, H,  CLR.D,
-     sprintf("%s\nN = %s", DESIGN.LABELS[DESIGN], fmt.n(N.DESIGN)))
-))
+     sprintf("Excluded: HMPV CT >%d\nor missing\nN = %s", CT.THRESHOLD, fmt.n(N.EXCL.HMPV.CT)))
+)
 
-# ── Segment/arrow layout ───────────────────────────────────────────────────────
-# derived from box edges (yb = yc - h/2, yt = yc + h/2)
-# segs.arr: draw with arrowhead at (xend, yend)
-# segs.line: draw without arrowhead
+# ── Partner CT step (design-specific) ─────────────────────────────────────────
+# Design B: single red exclusion box — all partner CT failures dropped
+# Design C: two boxes — red for dropped (CT missing/inconclusive) and
+#           yellow for reclassified (CT >threshold; cases are retained)
+#           b_design shifts down to accommodate the second box
+
+if (DESIGN == "B_restricted") {
+  
+  partner.boxes <- list(
+    mb("e_partner", 9.8, 3.9, W.E, HE, CLR.EXCL,
+       sprintf("Excluded: partner CT >%d,\nmissing, or inconclusive\nN = %s",
+               CT.THRESHOLD, fmt.n(N.DROPPED.PARTNER))),
+    mb("b_design",  6.8, 3.2, W.A, H, CLR.D,
+       sprintf("%s\nN = %s", DESIGN.LABELS[DESIGN], fmt.n(N.DESIGN))))
+  
+  y.junc.partner <- 3.90
+  yt.design      <- 3.2 + H / 2
+  ylim.bottom    <- 2.2
+  
+} else {
+  
+  partner.boxes <- list(
+    mb("e_partner_drop",      9.8, 4.3, W.E, HE, CLR.EXCL,
+       sprintf("Dropped: partner CT missing\nor inconclusive\nN = %s",
+               fmt.n(N.DROPPED.PARTNER))),
+    mb("e_partner_reclassify",9.8, 3.4, W.E, HE, "#fef9e7",
+       sprintf("Reclassified to HMPV-only:\npartner CT >%d\nN = %s",
+               CT.THRESHOLD, fmt.n(N.RECLASSIFIED))),
+    mb("b_design",  6.8, 2.6, W.A, H, CLR.D,
+       sprintf("%s\nN = %s", DESIGN.LABELS[DESIGN], fmt.n(N.DESIGN))))
+  
+  y.junc.drop        <- 4.30
+  y.junc.reclassify  <- 3.40
+  yt.design          <- 2.6 + H / 2
+  ylim.bottom        <- 1.85
+  
+}
+
+boxes <- rbindlist(c(shared.boxes, partner.boxes))
 
 ARR <- arrow(length=unit(0.18, "cm"), type="closed")
 
@@ -130,53 +153,59 @@ yb.dat    <-  6.9 - H/2   # =  6.51
 yt.arm_a  <-  5.2 + H/2   # =  5.59
 yt.hmpvct <-  5.2 + H/2   # =  5.59
 yb.hmpvct <-  5.2 - H/2   # =  4.81
-yt.design <-  3.2 + H/2   # =  3.59
 
 # junction y-values: midpoints used for exclusion branches
 y.junc.e1     <- (yb.sites + yt.hmpv) / 2   # = 9.60
 y.junc.e2     <- (yb.hmpv  + yt.dat)  / 2   # = 7.80
-y.fork        <- 6.20                         # below b_dat, above arm boxes
-y.junc.hmpvct <- 5.90                         # HMPV CT exclusion branch
-y.junc.partner <- 3.90                        # partner CT branch
+y.fork        <- 6.20
+y.junc.hmpvct <- 5.90
 
 # left edge of right-arm exclusion boxes (xc=9.8, w=3.2 → left=8.2)
 x.excl.right.left <- 9.8 - W.E / 2   # = 8.2
 
-segs.arr <- rbind(
-  # main flow: b_sites → b_hmpv
-  data.table(x=4.2, y=yb.sites,       xend=4.2, yend=yt.hmpv,       col="black"),
-  # exclusion branch at e_hmpv (left edge of e_hmpv: 8.5 - 3.2/2 = 6.9)
-  data.table(x=4.2, y=y.junc.e1,      xend=6.9, yend=y.junc.e1,     col="grey40"),
-  
-  # main flow: b_hmpv → b_dat
-  data.table(x=4.2, y=yb.hmpv,        xend=4.2, yend=yt.dat,        col="black"),
-  # exclusion branch at e_multi
-  data.table(x=4.2, y=y.junc.e2,      xend=6.9, yend=y.junc.e2,     col="grey40"),
-  
-  # fork: left arm → b_arm_a
-  data.table(x=1.8, y=y.fork,         xend=1.8, yend=yt.arm_a,      col="black"),
-  
-  # fork: right arm → b_hmpv_ct (via HMPV CT junction)
-  data.table(x=6.8, y=y.junc.hmpvct,  xend=6.8, yend=yt.hmpvct,     col="black"),
-  # exclusion branch at e_hmpvct
-  data.table(x=6.8, y=y.junc.hmpvct,  xend=x.excl.right.left, yend=y.junc.hmpvct, col="grey40"),
-  
-  # right arm: b_hmpv_ct → b_design (via partner CT junction)
-  data.table(x=6.8, y=y.junc.partner, xend=6.8, yend=yt.design,     col="black"),
-  # exclusion/reclassify branch at e_partner
-  data.table(x=6.8, y=y.junc.partner, xend=x.excl.right.left, yend=y.junc.partner, col="grey40")
+# shared arrowed segments (everything above and including the HMPV CT step)
+segs.arr.shared <- rbind(
+  data.table(x=4.2, y=yb.sites,      xend=4.2,               yend=yt.hmpv,      col="black"),  # B1→B2
+  data.table(x=4.2, y=y.junc.e1,     xend=6.9,               yend=y.junc.e1,    col="grey40"), # →e_hmpv
+  data.table(x=4.2, y=yb.hmpv,       xend=4.2,               yend=yt.dat,       col="black"),  # B2→B3
+  data.table(x=4.2, y=y.junc.e2,     xend=6.9,               yend=y.junc.e2,    col="grey40"), # →e_multi
+  data.table(x=1.8, y=y.fork,        xend=1.8,               yend=yt.arm_a,     col="black"),  # →arm_a
+  data.table(x=6.8, y=y.junc.hmpvct, xend=6.8,               yend=yt.hmpvct,    col="black"),  # →hmpv_ct
+  data.table(x=6.8, y=y.junc.hmpvct, xend=x.excl.right.left, yend=y.junc.hmpvct,col="grey40") # →e_hmpvct
 )
 
-segs.line <- rbind(
-  # b_dat bottom → fork point
-  data.table(x=4.2, y=yb.dat,         xend=4.2, yend=y.fork),
-  # horizontal fork connector
-  data.table(x=1.8, y=y.fork,         xend=6.8, yend=y.fork),
-  # right arm: fork → HMPV CT junction (no arrowhead; arrow picks up from junction)
-  data.table(x=6.8, y=y.fork,         xend=6.8, yend=y.junc.hmpvct),
-  # right arm: b_hmpv_ct bottom → partner CT junction
-  data.table(x=6.8, y=yb.hmpvct,      xend=6.8, yend=y.junc.partner)
+# shared plain segments (no arrowhead)
+segs.line.shared <- rbind(
+  data.table(x=4.2, y=yb.dat,        xend=4.2, yend=y.fork),        # b_dat→fork
+  data.table(x=1.8, y=y.fork,        xend=6.8, yend=y.fork),        # horizontal fork
+  data.table(x=6.8, y=y.fork,        xend=6.8, yend=y.junc.hmpvct)  # fork→hmpv_ct junction
 )
+
+# ── Partner CT segments (design-specific) ─────────────────────────────────────
+if (DESIGN == "B_restricted") {
+  
+  # single junction: both drop reasons handled together
+  partner.segs.arr <- rbind(
+    data.table(x=6.8, y=y.junc.partner, xend=6.8,               yend=yt.design,      col="black"),
+    data.table(x=6.8, y=y.junc.partner, xend=x.excl.right.left, yend=y.junc.partner, col="grey40"))
+  
+  partner.segs.line <- data.table(x=6.8, y=yb.hmpvct, xend=6.8, yend=y.junc.partner)
+  
+} else {
+  
+  # two junctions: drop junction (CT missing/inconclusive) above reclassify junction (CT >threshold)
+  partner.segs.arr <- rbind(
+    data.table(x=6.8, y=y.junc.drop,       xend=x.excl.right.left, yend=y.junc.drop,       col="grey40"),
+    data.table(x=6.8, y=y.junc.reclassify, xend=x.excl.right.left, yend=y.junc.reclassify, col="grey40"),
+    data.table(x=6.8, y=y.junc.reclassify, xend=6.8,               yend=yt.design,         col="black"))
+  
+  # single line from hmpv_ct bottom through both junctions; branch arrows handle the rest
+  partner.segs.line <- data.table(x=6.8, y=yb.hmpvct, xend=6.8, yend=y.junc.reclassify)
+  
+}
+
+segs.arr  <- rbind(segs.arr.shared,  partner.segs.arr)
+segs.line <- rbind(segs.line.shared, partner.segs.line)
 
 # ── Build figure ───────────────────────────────────────────────────────────────
 
@@ -197,14 +226,14 @@ fig1 <- ggplot() +
   geom_text(data=boxes,
             aes(x=xc, y=yc, label=label),
             size=2.75, lineheight=1.25) +
-  coord_cartesian(xlim=c(0, 11.5), ylim=c(2.2, 11.2), expand=FALSE) +
+  coord_cartesian(xlim=c(0, 11.5), ylim=c(ylim.bottom, 11.2), expand=FALSE) +
   theme_void() +
   theme(
     legend.position  = "none",
     plot.background  = element_rect(fill="white", color=NA),
     plot.margin      = margin(8, 8, 8, 8))
 
-# ggsave("Output/fig1_consort.pdf", fig1, width=7, height=9, units="in")
-# ggsave("Output/fig1_consort.png", fig1, width=7, height=9, units="in", dpi=300)
+ggsave("Output/fig1_consort.pdf", fig1, width=7, height=9, units="in")
+ggsave("Output/fig1_consort.png", fig1, width=7, height=9, units="in", dpi=300)
 
 fig1

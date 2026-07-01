@@ -18,12 +18,13 @@ cdc <- fread("Data/Pitt_Anna_HMPV_JUN26.csv")
 # ── Design switch ──────────────────────────────────────────────────────────────
 # Controls which co-detection/CT handling rule is applied downstream.
 #   "A_unrestricted" : all HMPV-positive cases; co-detection by standard lab positivity
-#   "B_restricted"   : HMPV CT>30 dropped; co-detection partner CT>30 or inconclusive
-#                      results in the CASE BEING DROPPED (not reclassified to mono)
-#   "C_reclassify"    : [not yet implemented - placeholder for PI-discussion Analysis C]
-#                      HMPV CT<=30 retained; co-detection partner failing CT reclassified
-#                      to "absent" rather than dropping the case
-DESIGN <- "C_reclassify"
+#   "B_restricted"   : HMPV CT >threshold or missing: case dropped
+#                      partner CT >threshold, missing, or inconclusive: case dropped
+#   "C_reclassify"   : HMPV CT >threshold or missing: case dropped
+#                      partner CT missing or inconclusive: case dropped
+#                      partner CT >threshold: case retained, co-detection reclassified
+#                      to hmpv-only (d_reclassified == TRUE flags these cases)
+DESIGN <- "B_restricted"
 CT.THRESHOLD <- 30
 
 stopifnot(DESIGN %in% c("A_unrestricted", "B_restricted", "C_reclassify"))

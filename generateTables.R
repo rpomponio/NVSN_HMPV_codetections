@@ -110,10 +110,11 @@ if (DESIGN == "A_unrestricted") {
       CT.THRESHOLD, CT.THRESHOLD, N.EXCLUDED)
   } else {
     sprintf(
-      paste("\"Excluded (CT)\": HMPV CT >%d or missing. Case dropped entirely.",
-            "Partner CT failures under Design C result in reclassification to",
-            "HMPV monoinfection, not exclusion (N=%d excluded on HMPV CT only)."),
-      CT.THRESHOLD, N.EXCLUDED)
+      paste("\"Excluded (CT)\": HMPV CT >%d or missing, OR partner CT missing",
+            "or inconclusive — cases dropped entirely (N=%d).",
+            "Partner CT >%d results in reclassification to HMPV monoinfection",
+            "(retained in analysis); reclassified cases are not excluded."),
+      CT.THRESHOLD, N.EXCLUDED, CT.THRESHOLD)
   }
   
   tab1 <- tbl_summary(
