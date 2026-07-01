@@ -132,17 +132,16 @@ if (DESIGN == "A_unrestricted") {
       all_continuous() ~ "{median} ({p25}, {p75})")) |>
     add_overall(last=FALSE) |>
     add_p(test=list(
-      d_race_eth     ~ "fisher.test",
-      d_studysite    ~ "fisher.test",
-      d_ariyear      ~ "fisher.test",
-      d_codetect_lab ~ "fisher.test",
       all_continuous()  ~ "wilcox.test",
       all_dichotomous() ~ "fisher.test",
-      all_categorical() ~ "chisq.test")) |>
+      all_categorical() ~ "chisq.test",
+      d_race_eth     ~ "fisher.test"),
+      test.args=list(
+        d_race_eth ~ list(simulate.p.value=TRUE, B=10000))) |>
     modify_footnote_header(
       footnote=paste("Wilcoxon rank-sum for continuous variables; Fisher's exact test",
                      "for dichotomous and small-cell categorical variables; chi-square",
-                     "for site, race/ethnicity, study year, and co-detected pathogen."),
+                     "for site, insurance type, study year, and co-detected pathogen."),
       columns="p.value") |>
     fmt.stars() |>
     fmt(footnote.excl=excl.note)
