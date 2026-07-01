@@ -205,7 +205,10 @@ DESIGN.LABELS <- c(
   B_restricted   = "B: Restricted (CT \u226430)",
   C_reclassify   = "C: Reclassified (CT \u226430)")
 
-tbl2.list <- lapply(DESIGNS, function(nm) {
+
+COMPARE.DESIGNS <- unique(c("A_unrestricted", DESIGN))
+
+make.tbl2 <- function(nm) {
   tbl_regression(
     fit.list[[nm]],
     exponentiate=TRUE,
@@ -213,19 +216,28 @@ tbl2.list <- lapply(DESIGNS, function(nm) {
     label=list(d_codetect="Co-detected pathogen")) |>
     modify_header(estimate="**OR (95% CI)**") |>
     bold_p(t=0.05)
-})
-names(tbl2.list) <- DESIGNS
+}
 
-tab2 <- tbl_merge(
-  tbl2.list,
-  tab_spanner=paste0("**", DESIGN.LABELS, "**")) |>
-  modify_footnote_header(
-    footnote=paste(
-      "Proportional odds (ordinal logistic) regression; m=5 multiple imputation,",
-      "pooled via Rubin's rules. Reference: HMPV monoinfection.",
-      "Adjusted for age (months), preterm birth, any underlying condition,",
-      "and enrollment site. OR >1 indicates higher odds of more severe illness."),
-    columns=starts_with("estimate"))
+tab2.footnote <- paste(
+  "Proportional odds (ordinal logistic) regression; m=5 multiple imputation,",
+  "pooled via Rubin's rules. Reference: HMPV monoinfection.",
+  "Adjusted for age (months), preterm birth, any underlying condition,",
+  "and enrollment site. OR >1 indicates higher odds of more severe illness.")
+
+if (length(COMPARE.DESIGNS) == 1) {
+  
+  tab2 <- make.tbl2("A_unrestricted") |>
+    modify_footnote_header(footnote=tab2.footnote, columns="estimate")
+  
+} else {
+  
+  tbl2.list <- setNames(lapply(COMPARE.DESIGNS, make.tbl2), COMPARE.DESIGNS)
+  
+  tab2 <- tbl_merge(
+    tbl2.list,
+    tab_spanner=paste0("**", DESIGN.LABELS[COMPARE.DESIGNS], "**")) |>
+    modify_footnote_header(footnote=tab2.footnote, columns=starts_with("estimate"))
+}
 
 tab2
 
