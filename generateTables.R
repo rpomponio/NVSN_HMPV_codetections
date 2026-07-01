@@ -12,18 +12,9 @@ library(mice)
 library(gtsummary)
 
 # runs data ingest, cohort assembly, and all d_ derivations;
-# produces: dat (pre-CT, HMPV-positive), prelim (analytic cohort), DESIGN, CT.THRESHOLD
+# produces: dat, prelim, build.prelim(), DESIGN, CT.THRESHOLD, PATHOGENS
+# d_hospitalized and d_codetect_lab (factor) are both derived on dat in prelim.R
 source("prelim.R")
-
-# ── Variables needed on dat but only derived on prelim in prelim.R ────────────
-
-# d_hospitalized is constructed from c_finalstatus on prelim inside prelim.R;
-# re-derive here on the full pre-CT dat for use in Table 1 overall/excluded rows
-dat[, d_hospitalized:=fifelse(c_finalstatus == 1, "Hospitalized", "Not Hospitalized")]
-
-# d_codetect_lab is character on dat; factor for display, retaining all observed levels
-dat[, d_codetect_lab:=factor(d_codetect_lab, c("hmpv-only", names(PATHOGENS)))]
-dat[, d_codetect_lab:=droplevels(d_codetect_lab)]
 
 # ── CT inclusion flag ─────────────────────────────────────────────────────────
 # TRUE  = case is in prelim (proceeds to downstream analysis under active DESIGN)
@@ -160,61 +151,8 @@ if (DESIGN == "A_unrestricted") {
 tab1
 
 # ── TABLE 2 setup ─────────────────────────────────────────────────────────────
-
-# build.prelim() encapsulates the cohort assembly logic from prelim.R so that
-# all three designs can be built from the same dat object without re-sourcing.
-# keep in sync with prelim.R if the assembly or severity derivation logic changes.
-build.prelim <- function(dat, design, ct.threshold=CT.THRESHOLD) {
-  
-  if (design == "A_unrestricted") {
-    out <- copy(dat)
-    out[, d_codetect:=d_codetect_lab]
-    
-  } else {
-    # step 1: drop if HMPV CT missing or fails threshold (shared between B and C)
-    out <- dat[!is.na(d_hmpv_ct) & d_hmpv_ct <= ct.threshold]
-    out[, d_partner_ct:=as.numeric(NA)]
-    out[, d_partner_inconclusive:=FALSE]
-    for (i in which(out[, d_n_codetect_lab == 1])) {
-      pth <- as.character(out$d_codetect_lab[i])
-      out[i, d_partner_ct        :=get(paste0("d_", pth, "_ct"))]
-      out[i, d_partner_inconclusive:=(get(paste0("d_", pth, "_result")) == "Inconclusive")]
-    }
-    out[, d_partner_fails_ct:=fcase(
-      d_n_codetect_lab == 1 & (is.na(d_partner_ct) | d_partner_ct > ct.threshold), TRUE,
-      d_n_codetect_lab == 1 & d_partner_inconclusive,                              TRUE,
-      default=FALSE)]
-    
-    if (design == "B_restricted") {
-      out <- out[d_partner_fails_ct == FALSE]
-      out[, d_codetect:=d_codetect_lab]
-      
-    } else if (design == "C_reclassify") {
-      out[, d_reclassified:=d_partner_fails_ct]
-      out[d_partner_fails_ct == TRUE,  d_codetect:="hmpv-only"]
-      out[d_partner_fails_ct == FALSE, d_codetect:=d_codetect_lab]
-    }
-  }
-  
-  # derive severity; d_hospitalized already on dat (line 21 above), inherited here
-  out[, d_severity:=fcase(
-    c_died      == 1L, 6L,
-    c_intubated == 1L, 5L,
-    inptEcmo    == 1L, 5L,
-    inptICU     == 1L, 4L,
-    d_hospitalized == "Hospitalized" & (c_suppoxy == 1L | c_blowby == 1L |
-                                          c_hfnc == 1L | c_cpap == 1L), 3L,
-    d_hospitalized == "Hospitalized", 2L,
-    default=1L)]
-  out[, d_severity:=factor(d_severity, levels=1:6,
-                           labels=c("Discharge", "Hospitalized", "Hospitalized + O2",
-                                    "ICU", "Ventilated / ECMO", "Died"),
-                           ordered=TRUE)]
-  
-  out[, d_codetect:=factor(d_codetect, c("hmpv-only", names(PATHOGENS)))]
-  out[, d_codetect:=droplevels(d_codetect)]
-  out
-}
+# build.prelim() is defined in prelim.R (sourced above); calling it here for all
+# three designs without re-sourcing or duplicating the assembly logic
 
 # ── Build all three cohorts ───────────────────────────────────────────────────
 

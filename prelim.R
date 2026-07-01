@@ -135,85 +135,81 @@ stopifnot(!any(dat[d_n_codetect_lab == 1, is.na(d_codetect_lab)]))
 dat[, d_codetect_lab:=factor(d_codetect_lab, c("hmpv-only", names(PATHOGENS)))]
 dat[, d_codetect_lab:=droplevels(d_codetect_lab)]
 
-# ── Cohort assembly by design ──────────────────────────────────────────────────
+# ── Cohort assembly ────────────────────────────────────────────────────────────
 # d_hospitalized derived here on dat so it is available on both dat and prelim
-# (prelim is a copy/subset of dat; generateTables.R uses it on dat for the overall column)
+# (prelim is a copy/subset of dat; generateTables.R uses dat for the Table 1
+# overall column, which requires d_hospitalized on the pre-CT cohort)
 dat[, d_hospitalized:=fifelse(c_finalstatus == 1, "Hospitalized", "Not Hospitalized")]
 
-if (DESIGN == "A_unrestricted") {
+# build.prelim() is the single definition of design-specific cohort assembly and
+# outcome derivation. called below for the active DESIGN; generateTables.R sources
+# this file and calls build.prelim() for all three designs without re-sourcing.
+build.prelim <- function(dat, design, ct.threshold=CT.THRESHOLD) {
   
-  prelim <- copy(dat)
-  
-} else if (DESIGN %in% c("B_restricted", "C_reclassify")) {
-  
-  # step 1: drop if HMPV CT missing or fails threshold (same for B and C)
-  keep <- dat[!is.na(d_hmpv_ct) & d_hmpv_ct <= CT.THRESHOLD]
-  
-  # step 2: for single co-detections, evaluate partner CT and result
-  keep[, d_partner_ct:=as.numeric(NA)]
-  keep[, d_partner_inconclusive:=FALSE]
-  for (i in which(keep[, d_n_codetect_lab == 1])) {
-    pth <- as.character(keep$d_codetect_lab[i])
-    keep[i, d_partner_ct        :=get(paste0("d_", pth, "_ct"))]
-    keep[i, d_partner_inconclusive:=(get(paste0("d_", pth, "_result")) == "Inconclusive")]
+  if (design == "A_unrestricted") {
+    out <- copy(dat)
+    out[, d_codetect:=d_codetect_lab]
+    
+  } else {
+    # drop if HMPV CT missing or fails threshold (shared step for B and C)
+    out <- dat[!is.na(d_hmpv_ct) & d_hmpv_ct <= ct.threshold]
+    out[, d_partner_ct:=as.numeric(NA)]
+    out[, d_partner_inconclusive:=FALSE]
+    for (i in which(out[, d_n_codetect_lab == 1])) {
+      pth <- as.character(out$d_codetect_lab[i])
+      out[i, d_partner_ct        :=get(paste0("d_", pth, "_ct"))]
+      out[i, d_partner_inconclusive:=(get(paste0("d_", pth, "_result")) == "Inconclusive")]
+    }
+    out[, d_partner_fails_ct:=fcase(
+      d_n_codetect_lab == 1 & (is.na(d_partner_ct) | d_partner_ct > ct.threshold), TRUE,
+      d_n_codetect_lab == 1 & d_partner_inconclusive,                              TRUE,
+      default=FALSE)]
+    
+    if (design == "B_restricted") {
+      # B: drop the case if partner fails CT screen
+      out <- out[d_partner_fails_ct == FALSE]
+      out[, d_codetect:=d_codetect_lab]
+      
+    } else if (design == "C_reclassify") {
+      # C: retain the case; reclassify partner failure to hmpv-only
+      # d_reclassified flags cases moved from co-detection to monoinfection
+      out[, d_reclassified:=d_partner_fails_ct]
+      out[d_partner_fails_ct == TRUE,  d_codetect:="hmpv-only"]
+      out[d_partner_fails_ct == FALSE, d_codetect:=d_codetect_lab]
+      cat(sprintf("Design C: %d co-detections reclassified to hmpv-only after CT screen\n",
+                  sum(out$d_reclassified)))
+    }
   }
   
-  # flag: partner fails CT screen (CT missing, >threshold, or inconclusive result)
-  keep[, d_partner_fails_ct:=fcase(
-    d_n_codetect_lab == 1 & (is.na(d_partner_ct) | d_partner_ct > CT.THRESHOLD), TRUE,
-    d_n_codetect_lab == 1 & d_partner_inconclusive,                              TRUE,
-    default=FALSE)]
+  # factor d_codetect from its per-design value (not d_codetect_lab — would undo
+  # reclassification for Design C)
+  out[, d_codetect:=factor(d_codetect, c("hmpv-only", names(PATHOGENS)))]
+  out[, d_codetect:=droplevels(d_codetect)]
   
-  if (DESIGN == "B_restricted") {
-    
-    # B: drop the case if partner fails CT screen
-    prelim <- keep[d_partner_fails_ct == FALSE]
-    prelim[, d_codetect:=d_codetect_lab]
-    
-  } else if (DESIGN == "C_reclassify") {
-    
-    # C: retain the case; reclassify co-detection as absent (hmpv-only) if partner
-    # fails CT screen. HMPV monoinfection group now includes two sub-types:
-    # (a) true lab monoinfections and (b) lab co-detections reclassified after CT screen.
-    # d_reclassified flags the latter for sensitivity/audit use.
-    prelim <- copy(keep)
-    prelim[, d_reclassified:=d_partner_fails_ct]
-    prelim[d_partner_fails_ct == TRUE, d_codetect:="hmpv-only"]
-    prelim[d_partner_fails_ct == FALSE, d_codetect:=d_codetect_lab]
-    
-    cat(sprintf(
-      "Design C: %d co-detections reclassified to hmpv-only after CT screen\n",
-      sum(prelim$d_reclassified)))
-  }
+  # derive outcome: 6-level ordinal illness severity
+  # c_finalstatus: 1=Inpatient, 2=ED, 3=Outpatient, 5=Urgent Care
+  # d_hospitalized is on dat before this call; inherited by out as copy/subset
+  out[, d_severity:=fcase(
+    c_died      == 1L, 6L,
+    c_intubated == 1L, 5L,
+    inptEcmo    == 1L, 5L,
+    inptICU     == 1L, 4L,
+    d_hospitalized == "Hospitalized" & (c_suppoxy == 1L | c_blowby == 1L |
+                                          c_hfnc == 1L | c_cpap == 1L), 3L,
+    d_hospitalized == "Hospitalized", 2L,
+    default=1L)]
+  out[, d_severity:=factor(d_severity, levels=1:6,
+                           labels=c("Discharge", "Hospitalized", "Hospitalized + O2",
+                                    "ICU", "Ventilated / ECMO", "Died"),
+                           ordered=TRUE)]
+  out
 }
 
-# categorize co-detection status
-prelim[, d_codetect:=factor(d_codetect_lab, c("hmpv-only", names(PATHOGENS)))]
-prelim[, d_codetect:=droplevels(d_codetect)]
+prelim <- build.prelim(dat, DESIGN)
 
 cat(sprintf("Design: %s | N retained: %d (of %d HMPV-positive at CT sites)\n",
             DESIGN, nrow(prelim), nrow(dat)))
 table(prelim$d_codetect, exclude=NULL)
-
-# ── Outcome: 6-level ordinal illness severity ────────────────────────────────
-# c_finalstatus: 1=Inpatient, 2=ED, 3=Outpatient, 5=Urgent Care
-# d_hospitalized is derived on dat above; available here via prelim as a copy/subset
-prelim[, d_severity:=fcase(
-  c_died      == 1L, 6L,
-  c_intubated == 1L, 5L,
-  inptEcmo    == 1L, 5L,
-  inptICU     == 1L, 4L,
-  d_hospitalized == "Hospitalized" & (c_suppoxy == 1L | c_blowby == 1L |
-                                        c_hfnc == 1L | c_cpap == 1L), 3L,
-  d_hospitalized == "Hospitalized", 2L,
-  default=1L)]
-
-prelim[, d_severity:=factor(d_severity,
-                            levels=1:6,
-                            labels=c("Discharge", "Hospitalized", "Hospitalized + O2",
-                                     "ICU", "Ventilated / ECMO", "Died"),
-                            ordered=TRUE)]
-
 table(prelim$d_severity, exclude=NULL)
 
 # ── Missingness check on key analytic variables (flag >10% missing) ──────────
