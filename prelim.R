@@ -24,7 +24,7 @@ cdc <- fread("Data/Pitt_Anna_HMPV_JUN26.csv")
 #                      partner CT missing or inconclusive: case dropped
 #                      partner CT >threshold: case retained, co-detection reclassified
 #                      to hmpv-only (d_reclassified == TRUE flags these cases)
-DESIGN <- "B_restricted"
+DESIGN <- "C_reclassify"
 CT.THRESHOLD <- 30
 
 stopifnot(DESIGN %in% c("A_unrestricted", "B_restricted", "C_reclassify"))
@@ -112,6 +112,9 @@ for (p in names(PATHOGENS)) {
     x <- suppressWarnings(as.numeric(x))
     if (all(is.na(x))) NA_real_ else min(x, na.rm=TRUE)
   }), .SDcols=ct.vars]
+  
+  # remove rows if inconclusive
+  dat <- dat[(res.col)!="Inconclusive"]
 }
 
 # ── Co-detection classification: Analysis A (lab positivity, unrestricted) ───
@@ -134,7 +137,6 @@ dat[, d_codetect_lab:=fcase(
 stopifnot(!any(dat[d_n_codetect_lab == 1, is.na(d_codetect_lab)]))
 
 dat[, d_codetect_lab:=factor(d_codetect_lab, c("hmpv-only", names(PATHOGENS)))]
-dat[, d_codetect_lab:=droplevels(d_codetect_lab)]
 
 # ── Cohort assembly ────────────────────────────────────────────────────────────
 # d_hospitalized derived here on dat so it is available on both dat and prelim
@@ -158,12 +160,11 @@ build.prelim <- function(dat, design, ct.threshold=CT.THRESHOLD) {
     out[, d_partner_inconclusive:=FALSE]
     for (i in which(out[, d_n_codetect_lab == 1])) {
       pth <- as.character(out$d_codetect_lab[i])
-      out[i, d_partner_ct        :=get(paste0("d_", pth, "_ct"))]
-      out[i, d_partner_inconclusive:=(get(paste0("d_", pth, "_result")) == "Inconclusive")]
+      out[i, d_partner_ct:=get(paste0("d_", pth, "_ct"))]
     }
-    # replace the single d_partner_fails_ct assignment with two flags:
+
     out[, d_partner_ct_missing:=fcase(
-      d_n_codetect_lab == 1 & (is.na(d_partner_ct) | d_partner_inconclusive), TRUE,
+      d_n_codetect_lab == 1 & is.na(d_partner_ct), TRUE,
       default=FALSE)]
     
     out[, d_partner_ct_high:=fcase(
@@ -176,12 +177,14 @@ build.prelim <- function(dat, design, ct.threshold=CT.THRESHOLD) {
       out[, d_codetect:=d_codetect_lab]
       
     } else if (design == "C_reclassify") {
+      # C: drop only if missing, reclassify if high
       n.dropped.missing <- sum(out$d_partner_ct_missing)
       out <- out[d_partner_ct_missing == FALSE]
       out[, d_reclassified:=d_partner_ct_high]
-      out[d_partner_ct_high == TRUE,  d_codetect:="hmpv-only"]
-      out[d_partner_ct_high == FALSE, d_codetect:=d_codetect_lab]
-      cat(sprintf("Design C: %d reclassified (CT >%d); %d dropped (CT missing or inconclusive)\n",
+      out[, d_codetect:=fcase(
+        d_partner_ct_high == TRUE, "hmpv-only",
+        default=as.character(d_codetect_lab))]
+      cat(sprintf("Design C: %d reclassified (CT >%d); %d dropped (CT missing)\n",
                   sum(out$d_reclassified), ct.threshold, n.dropped.missing))
     }
   }
