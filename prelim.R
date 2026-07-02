@@ -18,10 +18,11 @@ cdc <- fread("Data/Pitt_Anna_HMPV_JUN26.csv")
 # ── Design switch ──────────────────────────────────────────────────────────────
 # Controls which co-detection/CT handling rule is applied downstream.
 #   "A_unrestricted" : all HMPV-positive cases; co-detection by standard lab positivity
+#                      co-detection inconclusive: case dropped
 #   "B_restricted"   : HMPV CT >threshold or missing: case dropped
-#                      partner CT >threshold, missing, or inconclusive: case dropped
+#                      partner CT >threshold or missing: case dropped
 #   "C_reclassify"   : HMPV CT >threshold or missing: case dropped
-#                      partner CT missing or inconclusive: case dropped
+#                      partner CT missing: case dropped
 #                      partner CT >threshold: case retained, co-detection reclassified
 #                      to hmpv-only (d_reclassified == TRUE flags these cases)
 DESIGN <- "C_reclassify"
@@ -113,9 +114,14 @@ for (p in names(PATHOGENS)) {
     if (all(is.na(x))) NA_real_ else min(x, na.rm=TRUE)
   }), .SDcols=ct.vars]
   
-  # remove rows if inconclusive
-  dat <- dat[(res.col)!="Inconclusive"]
+  # NOTE: (res.col) in data.table i evaluates to the literal string e.g.
+  # "d_rsv_result", not the column — get() is required for variable-name lookup
+  dat <- dat[get(res.col) != "Inconclusive"]
 }
+
+# track N after inconclusive filter; used in drawFigures.R to report
+# exclusion counts separately from the subsequent multi-codetect filter
+N.AFTER.INCONCLUSIVE <- nrow(dat)
 
 # ── Co-detection classification: Analysis A (lab positivity, unrestricted) ───
 # Identifies which (if any) partner pathogen(s) are lab-positive alongside HMPV.
@@ -132,11 +138,8 @@ dat[, d_codetect_lab:=fcase(
   d_n_codetect_lab == 0, "hmpv-only",
   default=names(PATHOGENS)[apply(.SD, 1, function(x) which(x == "Positive")[1])]),
   .SDcols=RESULT.COLS]
-# the line above only resolves correctly for n==1 rows; safe because fcase short-circuits,
-# but verify d_codetect_lab is never NA among d_n_codetect_lab==1 rows before proceeding
-stopifnot(!any(dat[d_n_codetect_lab == 1, is.na(d_codetect_lab)]))
-
 dat[, d_codetect_lab:=factor(d_codetect_lab, c("hmpv-only", names(PATHOGENS)))]
+dat[, d_codetect_lab:=droplevels(d_codetect_lab)]
 
 # ── Cohort assembly ────────────────────────────────────────────────────────────
 # d_hospitalized derived here on dat so it is available on both dat and prelim
@@ -157,12 +160,11 @@ build.prelim <- function(dat, design, ct.threshold=CT.THRESHOLD) {
     # drop if HMPV CT missing or fails threshold (shared step for B and C)
     out <- dat[!is.na(d_hmpv_ct) & d_hmpv_ct <= ct.threshold]
     out[, d_partner_ct:=as.numeric(NA)]
-    out[, d_partner_inconclusive:=FALSE]
     for (i in which(out[, d_n_codetect_lab == 1])) {
       pth <- as.character(out$d_codetect_lab[i])
       out[i, d_partner_ct:=get(paste0("d_", pth, "_ct"))]
     }
-
+    
     out[, d_partner_ct_missing:=fcase(
       d_n_codetect_lab == 1 & is.na(d_partner_ct), TRUE,
       default=FALSE)]

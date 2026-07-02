@@ -8,6 +8,7 @@
 ##       all analytical decisions made by the author
 ################################################### -
 
+library(mice)
 library(ggplot2)
 
 # produces: cdc, dat, prelim, build.prelim(), DESIGN, CT.THRESHOLD, CT.SITES, PATHOGENS
@@ -89,17 +90,17 @@ shared.boxes <- list(
   mb("e_hmpv",    8.5,  9.6, W.E, HE, CLR.EXCL,
      sprintf("Excluded: not HMPV-positive\nN = %s", fmt.n(N.EXCL.NOT.HMPV))),
   mb("e_multi",   8.5,  7.8, W.E, HE, CLR.EXCL,
-     sprintf("Excluded: multiple co-detections\nN = %s", fmt.n(N.EXCL.MULTI))),
+     sprintf("Excluded: multiple/inconclusive co-detections\nN = %s", fmt.n(N.EXCL.MULTI))),
   
-  # left fork arm: Analysis A (no further restriction)
+  # left fork arm: Design A (no further restriction)
   mb("b_arm_a",   1.8,  5.2, W.A, H,  CLR.A,
-     sprintf("Analysis A\n(Unrestricted)\nN = %s", fmt.n(N.DAT))),
+     sprintf("Design A (Unrestricted)\nN = %s", fmt.n(N.DAT))),
   
   # right fork arm: CT restriction (shared through HMPV CT step)
   mb("b_hmpv_ct", 6.8,  5.2, W.A, H,  CLR.MAIN,
      sprintf("HMPV CT \u2264 %d\nN = %s", CT.THRESHOLD, fmt.n(N.AFTER.HMPV.CT))),
   mb("e_hmpvct",  9.8,  5.9, W.E, HE, CLR.EXCL,
-     sprintf("Excluded: HMPV CT >%d\nor missing\nN = %s", CT.THRESHOLD, fmt.n(N.EXCL.HMPV.CT)))
+     sprintf("Excluded: HMPV CT >%d or missing\nN = %s", CT.THRESHOLD, fmt.n(N.EXCL.HMPV.CT)))
 )
 
 # ── Partner CT step (design-specific) ─────────────────────────────────────────
@@ -112,7 +113,7 @@ if (DESIGN == "B_restricted") {
   
   partner.boxes <- list(
     mb("e_partner", 9.8, 3.9, W.E, HE, CLR.EXCL,
-       sprintf("Excluded: partner CT >%d,\nmissing, or inconclusive\nN = %s",
+       sprintf("Excluded: partner CT >%d or missing\nN = %s",
                CT.THRESHOLD, fmt.n(N.DROPPED.PARTNER))),
     mb("b_design",  6.8, 3.2, W.A, H, CLR.D,
        sprintf("%s\nN = %s", DESIGN.LABELS[DESIGN], fmt.n(N.DESIGN))))
@@ -125,10 +126,10 @@ if (DESIGN == "B_restricted") {
   
   partner.boxes <- list(
     mb("e_partner_drop",      9.8, 4.3, W.E, HE, CLR.EXCL,
-       sprintf("Dropped: partner CT missing\nor inconclusive\nN = %s",
+       sprintf("Dropped: partner CT missing\nN = %s",
                fmt.n(N.DROPPED.PARTNER))),
     mb("e_partner_reclassify",9.8, 3.4, W.E, HE, "#fef9e7",
-       sprintf("Reclassified to HMPV-only:\npartner CT >%d\nN = %s",
+       sprintf("Reclassified: partner CT >%d\nN = %s",
                CT.THRESHOLD, fmt.n(N.RECLASSIFIED))),
     mb("b_design",  6.8, 2.6, W.A, H, CLR.D,
        sprintf("%s\nN = %s", DESIGN.LABELS[DESIGN], fmt.n(N.DESIGN))))
@@ -237,3 +238,193 @@ ggsave("Output/fig1_consort.pdf", fig1, width=7, height=9, units="in")
 ggsave("Output/fig1_consort.png", fig1, width=7, height=9, units="in", dpi=300)
 
 fig1
+# ── FIGURE 2: OR comparison, Analysis A vs active DESIGN ──────────────────────
+# each co-detection group shown as an ellipse:
+#   center: (OR_A, OR_design) in log scale
+#   x semi-axis: half the Analysis A CI width in log space
+#   y semi-axis: half the active design CI width in log space
+# the 45-degree line indicates perfect agreement between designs.
+# ellipses colored by significance pattern (p<0.05) across the two designs.
+#
+# note: if generateTables.R was sourced earlier in the same session, the fitted
+# models (fit.list) and helper functions are reused without re-running MI.
+# running this script cold (without a prior generateTables.R source) will
+# trigger MI which takes several minutes.
+
+
+
+# ── Reuse or rebuild model infrastructure ─────────────────────────────────────
+
+FIG2.DESIGNS <- unique(c("A_unrestricted", DESIGN))
+
+if (!exists("prelim.list"))
+  prelim.list <- setNames(lapply(FIG2.DESIGNS, build.prelim, dat=dat), FIG2.DESIGNS)
+
+if (!exists("run.mi.polr")) {
+  # mirrors generateTables.R; reproduced here so drawFigures.R is self-contained
+  MODEL.VARS  <- c("d_severity", "d_codetect", "d_agemonths",
+                   "d_premature", "d_anyunderlying", "d_studysite")
+  IMP.METHODS <- c(d_severity="", d_codetect="",
+                   d_agemonths="pmm", d_premature="logreg",
+                   d_anyunderlying="logreg", d_studysite="")
+  run.mi.polr <- function(prelim, m=5, seed=42) {
+    mod.dat <- prelim[, .SD, .SDcols=MODEL.VARS]
+    mod.dat <- mod.dat[!is.na(d_codetect) & !is.na(d_severity)]
+    mids <- mice(mod.dat, m=m, seed=seed, printFlag=FALSE, method=IMP.METHODS)
+    with(mids, MASS::polr(
+      d_severity ~ d_codetect + d_agemonths + d_premature + d_anyunderlying + d_studysite,
+      Hess=TRUE))
+  }
+}
+
+if (!exists("fit.list")) {
+  message("fit.list not found; running MI for Figure 2 (this may take several minutes)...")
+  fit.list <- lapply(prelim.list[FIG2.DESIGNS], run.mi.polr)
+}
+
+if (!exists("get.pooled.codetect")) {
+  get.pooled.codetect <- function(fit, design.name) {
+    sm <- as.data.table(summary(mice::pool(fit), conf.int=TRUE, exponentiate=FALSE))
+    sm <- sm[grepl("^d_codetect", term)]
+    sm[, `:=`(
+      design = design.name,
+      level  = sub("^d_codetect", "", term),
+      or     = exp(estimate),
+      ci.lo  = exp(estimate - qt(0.975, df) * std.error),
+      ci.hi  = exp(estimate + qt(0.975, df) * std.error),
+      sig    = p.value < 0.05)]
+    sm[, .(design, level, or, ci.lo, ci.hi, sig)]
+  }
+}
+
+# ── Extract and reshape pooled estimates ──────────────────────────────────────
+
+pooled.fig2 <- rbindlist(mapply(
+  get.pooled.codetect, fit.list[FIG2.DESIGNS], FIG2.DESIGNS, SIMPLIFY=FALSE))
+
+fig2.wide <- dcast(pooled.fig2, level ~ design, value.var=c("or", "ci.lo", "ci.hi", "sig"))
+
+# rename to design-agnostic short names for figure code below
+setnames(fig2.wide,
+         old=c(paste0(c("or_", "ci.lo_", "ci.hi_", "sig_"), "A_unrestricted"),
+               paste0(c("or_", "ci.lo_", "ci.hi_", "sig_"), DESIGN)),
+         new=c("or_A", "ci.lo_A", "ci.hi_A", "sig_A",
+               "or_D", "ci.lo_D", "ci.hi_D", "sig_D"))
+
+# significance pattern: compare p<0.05 across both designs
+# NA in or_D means the level is absent from the active design; these are
+# excluded from the figure since no ellipse can be drawn.
+# groups with non-finite or non-positive CI bounds (e.g. near-separation from
+# sparse data) are also excluded — they would produce log(-Inf) in the scale.
+fig2.wide <- fig2.wide[
+  !is.na(or_A) & !is.na(or_D) &
+    is.finite(ci.lo_A) & is.finite(ci.hi_A) & ci.lo_A > 0 &
+    is.finite(ci.lo_D) & is.finite(ci.hi_D) & ci.lo_D > 0]
+
+if (nrow(fig2.wide) == 0)
+  stop("No co-detection groups have finite CI bounds in both designs; cannot draw Figure 2.")
+
+if (nrow(fig2.wide) < nrow(dcast(pooled.fig2, level ~ design)))
+  message(sprintf("Figure 2: %d group(s) excluded due to non-finite CI bounds (likely sparse data).",
+                  nrow(dcast(pooled.fig2, level ~ design)) - nrow(fig2.wide)))
+
+fig2.wide[, sig_cat:=fcase(
+  sig_A &  sig_D,  "Significant in both",
+  !sig_A & !sig_D,  "Not significant in either",
+  default="Significance differs")]
+fig2.wide[, sig_cat:=factor(sig_cat,
+                            c("Significant in both", "Significance differs", "Not significant in either"))]
+
+# ── Ellipse polygons ──────────────────────────────────────────────────────────
+# generated in log space so the semi-axes correspond to the Wald CI half-widths.
+# back-transformed to OR scale for ggplot2 + scale_*_log10().
+
+THETA <- seq(0, 2 * pi, length.out=120)
+
+ellipses <- rbindlist(lapply(seq_len(nrow(fig2.wide)), function(i) {
+  r <- fig2.wide[i]
+  # semi-axes in log space: half CI width
+  cx <- log(r$or_A);   a <- (log(r$ci.hi_A) - log(r$ci.lo_A)) / 2
+  cy <- log(r$or_D);   b <- (log(r$ci.hi_D) - log(r$ci.lo_D)) / 2
+  data.table(
+    level   = r$level,
+    sig_cat = r$sig_cat,
+    x       = exp(cx + a * cos(THETA)),
+    y       = exp(cy + b * sin(THETA)))
+}))
+
+# ── Axis range ────────────────────────────────────────────────────────────────
+# symmetric across both axes so the agreement line bisects at 45 degrees.
+# padded by 15% in log space to give labels and annotation room.
+
+all.bounds <- c(fig2.wide$ci.lo_A, fig2.wide$ci.hi_A,
+                fig2.wide$ci.lo_D, fig2.wide$ci.hi_D)
+pad      <- exp(diff(log(range(all.bounds, na.rm=TRUE))) * 0.15)
+ax.range <- c(min(all.bounds, na.rm=TRUE) / pad,
+              max(all.bounds, na.rm=TRUE) * pad)
+
+# axis breaks: a tidy subset of the standard log-OR ladder within ax.range
+LOG.BREAKS <- c(0.125, 0.25, 0.5, 1, 2, 4, 8)
+ax.breaks  <- LOG.BREAKS[LOG.BREAKS >= ax.range[1] & LOG.BREAKS <= ax.range[2]]
+ax.labels  <- ifelse(ax.breaks < 1,
+                     formatC(ax.breaks, format="g"),
+                     as.character(ax.breaks))
+
+# ── Color palette ─────────────────────────────────────────────────────────────
+SIG.COLORS <- c(
+  "Significant in both"       = "#c0392b",   # red
+  "Significance differs"      = "#e67e22",   # orange
+  "Not significant in either" = "#7f8c8d")   # grey
+
+# ── Build figure ───────────────────────────────────────────────────────────────
+
+fig2 <- ggplot() +
+  # null-association reference lines (OR=1 on each axis)
+  geom_vline(xintercept=1, linewidth=0.35, linetype="dashed", color="grey55") +
+  geom_hline(yintercept=1, linewidth=0.35, linetype="dashed", color="grey55") +
+  # 45-degree agreement line
+  geom_line(data=data.table(x=ax.range, y=ax.range),
+            aes(x=x, y=y), linewidth=0.55, color="black") +
+  annotate("text",
+           x=ax.range[2] / 1.07, y=ax.range[2] / 1.35,
+           label="Line of\nagreement", size=2.4, color="black",
+           hjust=1, vjust=0, lineheight=1.1) +
+  # ellipses
+  geom_polygon(data=ellipses,
+               aes(x=x, y=y, group=level, fill=sig_cat, color=sig_cat),
+               alpha=0.18, linewidth=0.40) +
+  # center points
+  geom_point(data=fig2.wide,
+             aes(x=or_A, y=or_D, color=sig_cat),
+             size=2.2, shape=16) +
+  # co-detection level labels (offset above center)
+  geom_text(data=fig2.wide,
+            aes(x=or_A, y=or_D, label=level, color=sig_cat),
+            size=2.8, vjust=-1.0, hjust=0.5, fontface="italic") +
+  # scales
+  scale_x_log10(
+    name    = "OR \u2014 Analysis A (Unrestricted)",
+    limits  = ax.range,
+    breaks  = ax.breaks,
+    labels  = ax.labels) +
+  scale_y_log10(
+    name    = paste0("OR \u2014 ", DESIGN.LABELS[DESIGN]),
+    limits  = ax.range,
+    breaks  = ax.breaks,
+    labels  = ax.labels) +
+  scale_fill_manual(values=SIG.COLORS,  name=NULL) +
+  scale_color_manual(values=SIG.COLORS, name=NULL) +
+  # equal aspect ratio in log space so agreement line renders at true 45 degrees
+  coord_equal() +
+  theme_bw(base_size=10) +
+  theme(
+    legend.position  = "bottom",
+    legend.key.size  = unit(0.45, "cm"),
+    panel.grid.minor = element_blank(),
+    plot.background  = element_rect(fill="white", color=NA),
+    plot.margin      = margin(6, 6, 6, 6))
+
+ggsave("Output/fig2_or_comparison.pdf", fig2, width=6, height=6.5, units="in")
+ggsave("Output/fig2_or_comparison.png", fig2, width=6, height=6.5, units="in", dpi=300)
+
+fig2

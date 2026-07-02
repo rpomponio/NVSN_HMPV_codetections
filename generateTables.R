@@ -105,13 +105,13 @@ if (DESIGN == "A_unrestricted") {
   # build design-specific footnote describing what "Excluded (CT)" means
   excl.note <- if (DESIGN == "B_restricted") {
     sprintf(
-      paste("\"Excluded (CT)\": HMPV CT >%d or missing; or co-detection partner",
-            "CT >%d, missing, or inconclusive. Case dropped entirely (N=%d)."),
+      paste("\"Excluded (CT)\": HMPV CT >%d or missing; or partner",
+            "CT >%d or missing. Case dropped entirely (N=%d)."),
       CT.THRESHOLD, CT.THRESHOLD, N.EXCLUDED)
   } else {
     sprintf(
       paste("\"Excluded (CT)\": HMPV CT >%d or missing, OR partner CT missing",
-            "or inconclusive — cases dropped entirely (N=%d).",
+            "— cases dropped entirely (N=%d).",
             "Partner CT >%d results in reclassification to HMPV monoinfection",
             "(retained in analysis); reclassified cases are not excluded."),
       CT.THRESHOLD, N.EXCLUDED, CT.THRESHOLD)
@@ -206,7 +206,6 @@ DESIGN.LABELS <- c(
   B_restricted   = "B: Restricted (CT \u226430)",
   C_reclassify   = "C: Reclassified (CT \u226430)")
 
-
 COMPARE.DESIGNS <- unique(c("A_unrestricted", DESIGN))
 
 make.tbl2 <- function(nm) {
@@ -216,6 +215,7 @@ make.tbl2 <- function(nm) {
     include="d_codetect",
     label=list(d_codetect="Co-detected pathogen")) |>
     modify_header(estimate="**OR (95% CI)**") |>
+    add_n(location="level") |>
     bold_p(t=0.05)
 }
 
