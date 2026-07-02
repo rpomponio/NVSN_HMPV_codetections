@@ -9,6 +9,7 @@
 ################################################### -
 
 library(mice)
+library(flextable)
 library(gtsummary)
 
 # runs data ingest, cohort assembly, and all d_ derivations;
@@ -105,13 +106,13 @@ if (DESIGN == "A_unrestricted") {
   # build design-specific footnote describing what "Excluded (CT)" means
   excl.note <- if (DESIGN == "B_restricted") {
     sprintf(
-      paste("\"Excluded (CT)\": HMPV CT >%d or missing; or partner",
-            "CT >%d or missing. Case dropped entirely (N=%d)."),
+      paste("\"Excluded (CT)\": HMPV CT >%d or missing; or co-detection partner",
+            "CT >%d, missing, or inconclusive. Case dropped entirely (N=%d)."),
       CT.THRESHOLD, CT.THRESHOLD, N.EXCLUDED)
   } else {
     sprintf(
       paste("\"Excluded (CT)\": HMPV CT >%d or missing, OR partner CT missing",
-            "— cases dropped entirely (N=%d).",
+            "or inconclusive — cases dropped entirely (N=%d).",
             "Partner CT >%d results in reclassification to HMPV monoinfection",
             "(retained in analysis); reclassified cases are not excluded."),
       CT.THRESHOLD, N.EXCLUDED, CT.THRESHOLD)
@@ -149,6 +150,7 @@ if (DESIGN == "A_unrestricted") {
     fmt(footnote.excl=excl.note)
 }
 
+tab1 |> as_flex_table() |> save_as_docx(path="Output/table1.docx")
 tab1
 
 # ── TABLE 2 setup ─────────────────────────────────────────────────────────────
@@ -240,6 +242,7 @@ if (length(COMPARE.DESIGNS) == 1) {
     modify_footnote_header(footnote=tab2.footnote, columns=starts_with("estimate"))
 }
 
+tab2 |> as_flex_table() |> save_as_docx(path="Output/table2.docx")
 tab2
 
 # ── Conclusion-change summary ─────────────────────────────────────────────────
