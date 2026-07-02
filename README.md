@@ -10,7 +10,7 @@
 ## Timeline
 
 * 3/26/2026: Proposal of one-pager (approved)
-* Q3 2026: Clinical data anlysis complete
+* Q3 2026: Clinical data analysis complete
 * Q4 2026: Manuscript drafted
 * Q2 2027: Manuscript publication
 
@@ -45,7 +45,8 @@ install.packages(c(
   "MASS",         # polr() for proportional odds regression
   "mice",         # multiple imputation (Table 2)
   "gtsummary",    # Table 1 and Table 2 formatting
-  "ggplot2"       # Figure 1 CONSORT diagram
+  "flextable",    # Word-format table export
+  "ggplot2"       # Figure 1 (CONSORT diagram) and Figure 2 (OR comparison)
 ))
 ```
  
@@ -56,6 +57,7 @@ install.packages(c(
 | `gtsummary` | 2.0.0 | `modify_footnote_header()`, `modify_indent()`, and `bold_p(t=)` argument require v2.x |
 | `mice` | 3.14.0 | Default method selection for ordered factors (`polr`) and binary factors (`logreg`) relies on v3.x behavior |
 | `ggplot2` | 3.4.0 | `linewidth=` argument in `geom_segment()` replaces `size=` in earlier versions |
+| `flextable` | 0.9.0 | `save_as_docx()` used for Word export; earlier versions may differ in API |
  
 ---
  
@@ -65,10 +67,10 @@ install.packages(c(
 project/
 ├── Data/
 │   └── Pitt_Anna_HMPV_JUN26.csv          ← raw NVSN extract (not under version control)
-├── Output/                                ← figures written here (create if absent)
+├── Output/                                ← tables (.docx) and figures (.pdf/.png) written here
 ├── prelim.R                               ← data ingest, cohort assembly, all derivations
 ├── generateTables.R                       ← Table 1 and Table 2
-├── drawFigures.R                          ← Figure 1 (CONSORT diagram)
+├── drawFigures.R                          ← Figure 1 (CONSORT) and Figure 2 (OR comparison)
 └── README.md
 ```
  
@@ -95,8 +97,8 @@ CT.THRESHOLD <- 30               # CT value above which a result fails the thres
 | Value | Behavior |
 |---|---|
 | `"A_unrestricted"` | All HMPV-positive cases retained; co-detection defined by standard lab positivity with no CT restriction |
-| `"B_restricted"` | HMPV CT > threshold or missing: case **dropped**. Partner CT > threshold, missing, or inconclusive: case **dropped** |
-| `"C_reclassify"` | HMPV CT > threshold or missing: case **dropped**. Partner CT missing or inconclusive: case **dropped**. Partner CT > threshold: case **retained**, co-detection reclassified to HMPV-only (`d_reclassified == TRUE`) |
+| `"B_restricted"` | HMPV CT > threshold or missing: case **dropped**. Partner CT > threshold or missing: case **dropped** |
+| `"C_reclassify"` | HMPV CT > threshold or missing: case **dropped**. Partner CT missing: case **dropped**. Partner CT > threshold: case **retained**, co-detection reclassified to HMPV-only (`d_reclassified == TRUE`) |
  
 > **Note:** `drawFigures.R` will stop with an error if `DESIGN = "A_unrestricted"` since
 > Figure 1 is designed to compare Analysis A against a CT-restricted arm.
@@ -142,13 +144,10 @@ This script sources `prelim.R` automatically, then produces:
 - **Conclusion-change summary** — printed to console; flags co-detection levels where
   significance (p < 0.05) or OR direction changes between Analysis A and the active design.
 
-Both tables are returned as `gtsummary` objects (`tab1`, `tab2`) rendered in the R viewer.
-To save tables to file, add the following after each table is produced:
- 
-```r
-gtsummary::as_gt(tab1) |> gt::gtsave("Output/table1.html")
-gtsummary::as_gt(tab2) |> gt::gtsave("Output/table2.html")
-```
+Both tables are rendered in the R viewer and automatically saved to Word format:
+
+- `Output/table1.docx`
+- `Output/table2.docx`
  
 > **Note:** Table 2 runs multiple imputation (`mice`, m = 5) for all three designs
 > internally (`prelim.list`), which is computationally the most expensive step. Expect
@@ -162,16 +161,19 @@ source("drawFigures.R")
 ```
  
 This script sources `prelim.R` automatically, then produces:
- 
-- **Figure 1** — CONSORT-style inclusion waterfall showing the parallel Analysis A
-  (unrestricted) and active design (CT-restricted) arms.
-The figure is rendered in the R viewer. To save to file, **uncomment** the two `ggsave`
-lines near the end of `drawFigures.R`:
- 
-```r
-ggsave("Output/fig1_consort.pdf", fig1, width=7, height=9, units="in")
-ggsave("Output/fig1_consort.png", fig1, width=7, height=9, units="in", dpi=300)
-```
+
+- **Figure 1** — CONSORT-style inclusion waterfall showing the parallel Analysis A (unrestricted) and active design (CT-restricted) arms.
+- **Figure 2** — OR comparison plot: each co-detection group shown as an ellipse centered on its point estimates across both designs, with CI-derived semi-axes. The 45-degree line indicates perfect agreement. Groups with non-estimable CIs (sparse data) are omitted with a console message.
+
+All figures are saved automatically to `Output/` as both `.pdf` and `.png`:
+
+- `Output/fig1_consort.pdf` / `.png`
+- `Output/fig2_or_comparison.pdf` / `.png`
+
+> **Note:** Figure 2 requires the fitted models from `generateTables.R`. If `drawFigures.R`
+> is sourced in the same session as `generateTables.R`, the models are reused at no extra
+> cost. Running `drawFigures.R` cold (without a prior `generateTables.R` source) will
+> trigger multiple imputation, which takes several minutes.
  
 ---
  
@@ -188,3 +190,9 @@ ggsave("Output/fig1_consort.png", fig1, width=7, height=9, units="in", dpi=300)
 ```r
   setwd("/path/to/project")
 ```
+
+- **Influenza CT caveat:** `tFluACT` (influenza A CT value) appears to have been withheld
+  from the extract for unknown administrative reasons. Influenza co-detection cases are
+  therefore likely to fail the partner CT restriction at high rates under Designs B and C
+  due to structural missingness rather than high viral load. Treat influenza results under
+  CT-restricted designs with caution pending clarification from the CDC data manager.
