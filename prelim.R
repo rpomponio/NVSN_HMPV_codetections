@@ -25,7 +25,7 @@ cdc <- fread("Data/Pitt_Anna_HMPV_JUN26.csv")
 #                      partner CT missing: case dropped
 #                      partner CT >threshold: case retained, co-detection reclassified
 #                      to hmpv-only (d_reclassified == TRUE flags these cases)
-DESIGN <- "C_reclassify"
+DESIGN <- "B_restricted"
 CT.THRESHOLD <- 30
 
 stopifnot(DESIGN %in% c("A_unrestricted", "B_restricted", "C_reclassify"))
