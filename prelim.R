@@ -38,6 +38,7 @@ range(as.Date(cdc$scrdate, "%m/%d/%Y"), na.rm=TRUE)
 table(cdc$studysite, exclude=NULL)
 table(cdc$tmpv, exclude=NULL)
 summary(cdc$tmpvCT)
+boxplot(tmpvCT ~ c_ariyear, data=cdc)
 
 # ── Site restriction: 4 CT-reporting sites ────────────────────────────────────
 # Per confirmation: Houston, Pittsburgh, Rochester, Vanderbilt (studysite 5, 8, 2, 1)
@@ -49,11 +50,13 @@ dat[, d_studysite:=factor(studysite, c(1, 2, 5, 8),
 
 # ── Target population: HMPV-positive cases ────────────────────────────────────
 # tmpv: 0=Negative, 1=Positive, 2=Inconclusive, 8=Not performed
+# OPTIONAL: remove cases with HMPV-CT above threshold (focusing on active infections)
 dat[, d_hmpv_result:=factor(tmpv, c(0, 1, 2, 8),
                             c("Negative", "Positive", "Inconclusive", "Not performed"))]
 dat[, d_hmpv_ct:=as.numeric(tmpvCT)]
 
 dat <- dat[d_hmpv_result == "Positive"]
+if (REMOVE.HIGH.CT) dat <- dat[d_hmpv_ct <= CT.THRESHOLD]
 
 # ── Demographics & covariates (prefix: d_) ────────────────────────────────────
 
@@ -107,7 +110,7 @@ for (p in names(PATHOGENS)) {
     get(res.var) == 1, "Positive",
     get(res.var) == 0, "Negative",
     get(res.var) == 2, "Inconclusive",
-    get(res.var) == 8, "Not performed")]
+    default="Not performed")]
   
   # row-wise min CT across subtype columns, NA if all missing
   dat[, (ct.col):=apply(.SD, 1, function(x) {
@@ -115,10 +118,7 @@ for (p in names(PATHOGENS)) {
     if (all(is.na(x))) NA_real_ else min(x, na.rm=TRUE)
   }), .SDcols=ct.vars]
   
-  # NOTE: (res.col) in data.table i evaluates to the literal string e.g.
-  # "d_rsv_result", not the column — get() is required for variable-name lookup
-  cat(sprintf("Removing %d inconclusive results for pathogen: %s.\n",
-              sum(dat[, get(res.col)=="Inconclusive"]), p))
+  # remove inconclusives
   dat <- dat[get(res.col) != "Inconclusive"]
 }
 
@@ -158,7 +158,6 @@ build.prelim <- function(dat, design, ct.threshold=CT.THRESHOLD) {
   if (design == "A_unrestricted") {
     out <- copy(dat)
     out[, d_codetect:=d_codetect_lab]
-    if (REMOVE.HIGH.CT) out <- dat[d_hmpv_ct <= ct.threshold]
   } else {
     # drop if HMPV CT fails threshold (shared step for B and C)
     out <- dat[d_hmpv_ct <= ct.threshold]
