@@ -11,52 +11,72 @@
 library(mice)
 library(ggplot2)
 
-# produces: cdc, dat, prelim, build.prelim(), DESIGN, CT.THRESHOLD, CT.SITES, PATHOGENS
+# produces: cdc, dat, prelim, build.prelim(), DESIGN, CT.THRESHOLD, CT.SITES,
+# PATHOGENS, N.AFTER.HMPV.POS, N.AFTER.HMPV.CT (the last two track the
+# shared HMPV CT restriction applied to `dat` in prelim.R, upstream of the
+# design fork below)
 source("prelim.R")
 
 if (DESIGN == "A_unrestricted")
-  stop("Figure 1 requires a CT-restricted DESIGN (B or C); set DESIGN in prelim.R")
+  stop(paste("Figure 1 requires a CT-restricted DESIGN (B or C); set",
+             "DESIGN in prelim.R"))
 
-# ── Build design-specific cohort for figure ────────────────────────────────────
+# ── Build design-specific cohort for figure ─────────────────────────────── -
 
 prelim.design <- build.prelim(dat, DESIGN)
 
+# NOTE: "Design A" is no longer a fully unrestricted comparator - it is
+# unrestricted only with respect to the PARTNER pathogen's CT, since HMPV's
+# own CT restriction is now shared across all designs (applied to `dat` in
+# prelim.R). Labels below reflect this.
 DESIGN.LABELS <- c(
-  B_restricted = sprintf("Design B: Restricted (CT \u2264%d)", CT.THRESHOLD),
-  C_reclassify = sprintf("Design C: Reclassified (CT \u2264%d)", CT.THRESHOLD))
+  A_unrestricted = "Design A: Partner co-detection unrestricted",
+  B_restricted   = sprintf("Design B: Partner CT restricted (\u2264%d)",
+                           CT.THRESHOLD),
+  C_reclassify   = sprintf("Design C: Partner CT reclassified (\u2264%d)",
+                           CT.THRESHOLD))
 
-# ── FIGURE 1: CONSORT-style inclusion waterfall ─────────────────────────────────────────────────────
-# two parallel arms derived from the pre-CT cohort:
-#   left  — Analysis A (unrestricted; no further exclusions)
-#   right — active DESIGN (CT-restricted; exclusions or reclassification applied)
+# ── FIGURE 1: CONSORT-style inclusion waterfall ─────────────────────────── -
+# The HMPV CT <= CT.THRESHOLD restriction is drawn as a SHARED funnel step
+# (affects both arms identically), since it is applied to `dat` before the
+# A vs B/C fork - not as a right-arm-only step as in earlier versions of
+# this figure. Two parallel arms then branch from the shared, CT-restricted
+# cohort:
+#   left  — Design A (no partner-CT restriction)
+#   right — active DESIGN (partner-CT restricted; exclusions or
+#           reclassification applied)
 
-# ── N computations ─────────────────────────────────────────────────────────────
+# ── N computations ────────────────────────────────────────────────────────- -
 
 N.CT.SITES      <- cdc[studysite %in% CT.SITES, .N]
 N.HMPV.POS      <- cdc[studysite %in% CT.SITES & tmpv == 1, .N]
 N.EXCL.NOT.HMPV <- N.CT.SITES - N.HMPV.POS
-N.EXCL.MULTI    <- N.HMPV.POS - nrow(dat)
+
+# N.AFTER.HMPV.POS / N.AFTER.HMPV.CT come from prelim.R (computed on `dat`
+# before/after the shared HMPV CT filter, respectively)
+N.EXCL.HMPV.CT  <- N.AFTER.HMPV.POS - N.AFTER.HMPV.CT
+
+N.EXCL.MULTI    <- N.AFTER.HMPV.CT - nrow(dat)
 N.DAT           <- nrow(dat)
-N.AFTER.HMPV.CT <- dat[!is.na(d_hmpv_ct) & d_hmpv_ct <= CT.THRESHOLD, .N]
-N.EXCL.HMPV.CT  <- N.DAT - N.AFTER.HMPV.CT
 N.DESIGN        <- nrow(prelim.design)
 
 fmt.n <- function(n) formatC(n, format="d", big.mark=",")
 
-# N.DROPPED.PARTNER: cases lost at the partner CT step in both designs
+# N.DROPPED.PARTNER: cases lost at the partner CT step (both designs)
 #   Design B: all partner CT failures (missing, inconclusive, >threshold)
-#   Design C: only missing/inconclusive (CT >threshold is reclassified, not dropped)
-N.DROPPED.PARTNER <- N.AFTER.HMPV.CT - N.DESIGN
+#   Design C: only missing/inconclusive (CT >threshold is reclassified,
+#             not dropped)
+N.DROPPED.PARTNER <- N.DAT - N.DESIGN
 
 if (DESIGN == "C_reclassify")
   N.RECLASSIFIED <- sum(prelim.design$d_reclassified)
 
-# ── Box layout ─────────────────────────────────────────────────────────────────
-# coordinate system: x=[0, 11.5], y=[2.0, 11.2] (y=11.2 at top)
-# main shared flow:  xc=4.2
-# exclusion column:  xc=8.5 (main flow) / xc=9.8 (CT restriction arm)
-# Analysis A arm:    xc=1.8
-# CT restriction arm: xc=6.8
+# ── Box layout ────────────────────────────────────────────────────────────- -
+# coordinate system: x=[0, 11.5], y=[bottom, 11.2] (y=11.2 at top)
+# main shared flow:  xc=4.2 (now includes the HMPV CT step - shared)
+# exclusion column:  xc=8.5 (main flow) / xc=9.8 (partner-CT arm)
+# Design A arm:      xc=1.8
+# partner-CT arm:    xc=6.8
 
 W.M <- 4.2   # width: main flow boxes
 W.E <- 3.2   # width: exclusion boxes
@@ -67,7 +87,7 @@ HE  <- 0.72  # height: exclusion boxes
 # fill colors
 CLR.MAIN <- "#dce8f5"   # blue-grey: shared enrollment flow
 CLR.EXCL <- "#f5e6e6"   # red-tinted: exclusion boxes
-CLR.A    <- "#e8f5e9"   # green-tinted: Analysis A
+CLR.A    <- "#e8f5e9"   # green-tinted: Design A
 CLR.D    <- "#fff3e0"   # orange-tinted: Design B/C
 
 mb <- function(id, xc, yc, w, h, fill, label) {
@@ -78,32 +98,36 @@ mb <- function(id, xc, yc, w, h, fill, label) {
 }
 
 shared.boxes <- list(
-  # shared enrollment funnel (3 boxes, top to bottom)
-  mb("b_sites",   4.2, 10.5, W.M, H,  CLR.MAIN,
+  # shared enrollment funnel (5 boxes, top to bottom) - the HMPV CT step is
+  # now part of this shared funnel, not a right-arm-only step
+  mb("b_sites",  4.2, 10.90, W.M, H,  CLR.MAIN,
      sprintf("Enrolled: 4 CT-reporting sites\nN = %s", fmt.n(N.CT.SITES))),
-  mb("b_hmpv",    4.2,  8.7, W.M, H,  CLR.MAIN,
+  mb("b_hmpv",   4.2,  9.35, W.M, H,  CLR.MAIN,
      sprintf("HMPV-positive\nN = %s", fmt.n(N.HMPV.POS))),
-  mb("b_dat",     4.2,  6.9, W.M, H,  CLR.MAIN,
-     sprintf("Pre-CT eligible cohort\nN = %s", fmt.n(N.DAT))),
+  mb("b_hmpvct", 4.2,  7.80, W.M, H,  CLR.MAIN,
+     sprintf("HMPV CT \u2264 %d\nN = %s", CT.THRESHOLD,
+             fmt.n(N.AFTER.HMPV.CT))),
+  mb("b_dat",    4.2,  6.25, W.M, H,  CLR.MAIN,
+     sprintf("Eligible cohort (single/no co-detection)\nN = %s",
+             fmt.n(N.DAT))),
   
   # exclusion boxes: right of main flow
-  mb("e_hmpv",    8.5,  9.6, W.E, HE, CLR.EXCL,
-     sprintf("Excluded: not HMPV-positive\nN = %s", fmt.n(N.EXCL.NOT.HMPV))),
-  mb("e_multi",   8.5,  7.8, W.E, HE, CLR.EXCL,
-     sprintf("Excluded: multiple/inconclusive co-detections\nN = %s", fmt.n(N.EXCL.MULTI))),
+  mb("e_hmpv",   8.5, 10.125, W.E, HE, CLR.EXCL,
+     sprintf("Excluded: not HMPV-positive\nN = %s",
+             fmt.n(N.EXCL.NOT.HMPV))),
+  mb("e_hmpvct", 8.5,  8.575, W.E, HE, CLR.EXCL,
+     sprintf("Excluded: HMPV CT >%d or missing\nN = %s",
+             CT.THRESHOLD, fmt.n(N.EXCL.HMPV.CT))),
+  mb("e_multi",  8.5,  7.025, W.E, HE, CLR.EXCL,
+     sprintf("Excluded: multiple/inconclusive co-detections\nN = %s",
+             fmt.n(N.EXCL.MULTI))),
   
-  # left fork arm: Design A (no further restriction)
-  mb("b_arm_a",   1.8,  5.2, W.A, H,  CLR.A,
-     sprintf("Design A (Unrestricted)\nN = %s", fmt.n(N.DAT))),
-  
-  # right fork arm: CT restriction (shared through HMPV CT step)
-  mb("b_hmpv_ct", 6.8,  5.2, W.A, H,  CLR.MAIN,
-     sprintf("HMPV CT \u2264 %d\nN = %s", CT.THRESHOLD, fmt.n(N.AFTER.HMPV.CT))),
-  mb("e_hmpvct",  9.8,  5.9, W.E, HE, CLR.EXCL,
-     sprintf("Excluded: HMPV CT >%d or missing\nN = %s", CT.THRESHOLD, fmt.n(N.EXCL.HMPV.CT)))
+  # left fork arm: Design A (no partner-CT restriction)
+  mb("b_arm_a",  1.8,  4.75, W.A, H,  CLR.A,
+     sprintf("%s\nN = %s", DESIGN.LABELS["A_unrestricted"], fmt.n(N.DAT)))
 )
 
-# ── Partner CT step (design-specific) ─────────────────────────────────────────
+# ── Partner CT step (design-specific) ────────────────────────────────────- -
 # Design B: single red exclusion box — all partner CT failures dropped
 # Design C: two boxes — red for dropped (CT missing/inconclusive) and
 #           yellow for reclassified (CT >threshold; cases are retained)
@@ -112,32 +136,32 @@ shared.boxes <- list(
 if (DESIGN == "B_restricted") {
   
   partner.boxes <- list(
-    mb("e_partner", 9.8, 3.9, W.E, HE, CLR.EXCL,
+    mb("e_partner", 9.8, 3.85, W.E, HE, CLR.EXCL,
        sprintf("Excluded: partner CT >%d or missing\nN = %s",
                CT.THRESHOLD, fmt.n(N.DROPPED.PARTNER))),
-    mb("b_design",  6.8, 3.2, W.A, H, CLR.D,
+    mb("b_design",  6.8, 3.05, W.A, H, CLR.D,
        sprintf("%s\nN = %s", DESIGN.LABELS[DESIGN], fmt.n(N.DESIGN))))
   
-  y.junc.partner <- 3.90
-  yt.design      <- 3.2 + H / 2
-  ylim.bottom    <- 2.2
+  y.junc.partner <- 3.85
+  yt.design      <- 3.05 + H / 2
+  ylim.bottom    <- 2.1
   
 } else {
   
   partner.boxes <- list(
-    mb("e_partner_drop",      9.8, 4.3, W.E, HE, CLR.EXCL,
+    mb("e_partner_drop",       9.8, 4.25, W.E, HE, CLR.EXCL,
        sprintf("Dropped: partner CT missing\nN = %s",
                fmt.n(N.DROPPED.PARTNER))),
-    mb("e_partner_reclassify",9.8, 3.4, W.E, HE, "#fef9e7",
+    mb("e_partner_reclassify", 9.8, 3.35, W.E, HE, "#fef9e7",
        sprintf("Reclassified: partner CT >%d\nN = %s",
                CT.THRESHOLD, fmt.n(N.RECLASSIFIED))),
-    mb("b_design",  6.8, 2.6, W.A, H, CLR.D,
+    mb("b_design",  6.8, 2.55, W.A, H, CLR.D,
        sprintf("%s\nN = %s", DESIGN.LABELS[DESIGN], fmt.n(N.DESIGN))))
   
-  y.junc.drop        <- 4.30
-  y.junc.reclassify  <- 3.40
-  yt.design          <- 2.6 + H / 2
-  ylim.bottom        <- 1.85
+  y.junc.drop        <- 4.25
+  y.junc.reclassify  <- 3.35
+  yt.design          <- 2.55 + H / 2
+  ylim.bottom        <- 1.75
   
 }
 
@@ -146,69 +170,86 @@ boxes <- rbindlist(c(shared.boxes, partner.boxes))
 ARR <- arrow(length=unit(0.18, "cm"), type="closed")
 
 # box edge y-values used below
-yb.sites  <- 10.5 - H/2   # = 10.11
-yt.hmpv   <-  8.7 + H/2   # =  9.09
-yb.hmpv   <-  8.7 - H/2   # =  8.31
-yt.dat    <-  6.9 + H/2   # =  7.29
-yb.dat    <-  6.9 - H/2   # =  6.51
-yt.arm_a  <-  5.2 + H/2   # =  5.59
-yt.hmpvct <-  5.2 + H/2   # =  5.59
-yb.hmpvct <-  5.2 - H/2   # =  4.81
+yb.sites  <- 10.90 - H/2   # =  10.51
+yt.hmpv   <-  9.35 + H/2   # =   9.74
+yb.hmpv   <-  9.35 - H/2   # =   8.96
+yt.hmpvct <-  7.80 + H/2   # =   8.19
+yb.hmpvct <-  7.80 - H/2   # =   7.41
+yt.dat    <-  6.25 + H/2   # =   6.64
+yb.dat    <-  6.25 - H/2   # =   5.86
+yt.arm_a  <-  4.75 + H/2   # =   5.14
 
 # junction y-values: midpoints used for exclusion branches
-y.junc.e1     <- (yb.sites + yt.hmpv) / 2   # = 9.60
-y.junc.e2     <- (yb.hmpv  + yt.dat)  / 2   # = 7.80
-y.fork        <- 6.20
-y.junc.hmpvct <- 5.90
+y.junc.e1     <- (yb.sites  + yt.hmpv)   / 2   # = 10.125
+y.junc.hmpvct <- (yb.hmpv   + yt.hmpvct) / 2   # =  8.575
+y.junc.e2     <- (yb.hmpvct + yt.dat)    / 2   # =  7.025
+y.fork        <- 5.45
 
-# left edge of right-arm exclusion boxes (xc=9.8, w=3.2 → left=8.2)
+# left edge of right-arm exclusion boxes (xc=9.8, w=3.2 -> left=8.2)
 x.excl.right.left <- 9.8 - W.E / 2   # = 8.2
 
-# shared arrowed segments (everything above and including the HMPV CT step)
+# shared arrowed segments (everything from enrollment through the fork)
 segs.arr.shared <- rbind(
-  data.table(x=4.2, y=yb.sites,      xend=4.2,               yend=yt.hmpv,      col="black"),  # B1→B2
-  data.table(x=4.2, y=y.junc.e1,     xend=6.9,               yend=y.junc.e1,    col="grey40"), # →e_hmpv
-  data.table(x=4.2, y=yb.hmpv,       xend=4.2,               yend=yt.dat,       col="black"),  # B2→B3
-  data.table(x=4.2, y=y.junc.e2,     xend=6.9,               yend=y.junc.e2,    col="grey40"), # →e_multi
-  data.table(x=1.8, y=y.fork,        xend=1.8,               yend=yt.arm_a,     col="black"),  # →arm_a
-  data.table(x=6.8, y=y.junc.hmpvct, xend=6.8,               yend=yt.hmpvct,    col="black"),  # →hmpv_ct
-  data.table(x=6.8, y=y.junc.hmpvct, xend=x.excl.right.left, yend=y.junc.hmpvct,col="grey40") # →e_hmpvct
+  data.table(x=4.2, y=yb.sites,      xend=4.2, yend=yt.hmpv,
+             col="black"),                                   # B1->B2
+  data.table(x=4.2, y=y.junc.e1,     xend=6.9, yend=y.junc.e1,
+             col="grey40"),                                   # ->e_hmpv
+  data.table(x=4.2, y=yb.hmpv,       xend=4.2, yend=yt.hmpvct,
+             col="black"),                                   # B2->B3
+  data.table(x=4.2, y=y.junc.hmpvct, xend=6.9, yend=y.junc.hmpvct,
+             col="grey40"),                                   # ->e_hmpvct
+  data.table(x=4.2, y=yb.hmpvct,     xend=4.2, yend=yt.dat,
+             col="black"),                                    # B3->B4
+  data.table(x=4.2, y=y.junc.e2,     xend=6.9, yend=y.junc.e2,
+             col="grey40"),                                   # ->e_multi
+  data.table(x=1.8, y=y.fork,        xend=1.8, yend=yt.arm_a,
+             col="black")                                     # ->arm_a
 )
 
 # shared plain segments (no arrowhead)
 segs.line.shared <- rbind(
-  data.table(x=4.2, y=yb.dat,        xend=4.2, yend=y.fork),        # b_dat→fork
-  data.table(x=1.8, y=y.fork,        xend=6.8, yend=y.fork),        # horizontal fork
-  data.table(x=6.8, y=y.fork,        xend=6.8, yend=y.junc.hmpvct)  # fork→hmpv_ct junction
+  data.table(x=4.2, y=yb.dat, xend=4.2, yend=y.fork),  # b_dat->fork
+  data.table(x=1.8, y=y.fork, xend=6.8, yend=y.fork)   # horizontal fork
 )
 
-# ── Partner CT segments (design-specific) ─────────────────────────────────────
+# ── Partner CT segments (design-specific) ────────────────────────────────- -
+# right arm now runs directly from the fork down into the partner-CT step
+# (no intermediate HMPV-CT box on this arm - that step is shared above)
+
 if (DESIGN == "B_restricted") {
   
-  # single junction: both drop reasons handled together
   partner.segs.arr <- rbind(
-    data.table(x=6.8, y=y.junc.partner, xend=6.8,               yend=yt.design,      col="black"),
-    data.table(x=6.8, y=y.junc.partner, xend=x.excl.right.left, yend=y.junc.partner, col="grey40"))
+    data.table(x=6.8, y=y.junc.partner, xend=6.8, yend=yt.design,
+               col="black"),
+    data.table(x=6.8, y=y.junc.partner, xend=x.excl.right.left,
+               yend=y.junc.partner, col="grey40"))
   
-  partner.segs.line <- data.table(x=6.8, y=yb.hmpvct, xend=6.8, yend=y.junc.partner)
+  partner.segs.line <- data.table(
+    x=6.8, y=y.fork, xend=6.8, yend=y.junc.partner)
   
 } else {
   
-  # two junctions: drop junction (CT missing/inconclusive) above reclassify junction (CT >threshold)
+  # two junctions: drop junction (CT missing/inconclusive) above
+  # reclassify junction (CT >threshold)
   partner.segs.arr <- rbind(
-    data.table(x=6.8, y=y.junc.drop,       xend=x.excl.right.left, yend=y.junc.drop,       col="grey40"),
-    data.table(x=6.8, y=y.junc.reclassify, xend=x.excl.right.left, yend=y.junc.reclassify, col="grey40"),
-    data.table(x=6.8, y=y.junc.reclassify, xend=6.8,               yend=yt.design,         col="black"))
+    data.table(x=6.8, y=y.junc.drop, xend=x.excl.right.left,
+               yend=y.junc.drop, col="grey40"),
+    data.table(x=6.8, y=y.junc.reclassify, xend=x.excl.right.left,
+               yend=y.junc.reclassify, col="grey40"),
+    data.table(x=6.8, y=y.junc.reclassify, xend=6.8, yend=yt.design,
+               col="black"))
   
-  # single line from hmpv_ct bottom through both junctions; branch arrows handle the rest
-  partner.segs.line <- data.table(x=6.8, y=yb.hmpvct, xend=6.8, yend=y.junc.reclassify)
+  # single line from fork through both junctions; branch arrows handle
+  # the rest
+  partner.segs.line <- data.table(
+    x=6.8, y=y.fork, xend=6.8, yend=y.junc.reclassify)
   
 }
 
 segs.arr  <- rbind(segs.arr.shared,  partner.segs.arr)
 segs.line <- rbind(segs.line.shared, partner.segs.line)
 
-# ── Build figure ───────────────────────────────────────────────────────────────
+# ── Build figure ──────────────────────────────────────────────────────────- -
 
 fig1 <- ggplot() +
   # draw segments before boxes so boxes sit on top
@@ -234,34 +275,35 @@ fig1 <- ggplot() +
     plot.background  = element_rect(fill="white", color=NA),
     plot.margin      = margin(8, 8, 8, 8))
 
-ggsave("Output/fig1_consort.pdf", fig1, width=7, height=9, units="in")
-ggsave("Output/fig1_consort.png", fig1, width=7, height=9, units="in", dpi=300)
+ggsave("Output/fig1_consort.pdf", fig1, width=7, height=9.5, units="in")
+ggsave("Output/fig1_consort.png", fig1, width=7, height=9.5, units="in",
+       dpi=300)
 
 fig1
-# ── FIGURE 2: OR comparison, Analysis A vs active DESIGN ──────────────────────
+# ── FIGURE 2: OR comparison, Design A vs active DESIGN ───────────────────── -
 # each co-detection group shown as an ellipse:
 #   center: (OR_A, OR_design) in log scale
-#   x semi-axis: half the Analysis A CI width in log space
+#   x semi-axis: half the Design A CI width in log space
 #   y semi-axis: half the active design CI width in log space
 # the 45-degree line indicates perfect agreement between designs.
 # ellipses colored by significance pattern (p<0.05) across the two designs.
 #
-# note: if generateTables.R was sourced earlier in the same session, the fitted
-# models (fit.list) and helper functions are reused without re-running MI.
-# running this script cold (without a prior generateTables.R source) will
-# trigger MI which takes several minutes.
+# note: if generateTables.R was sourced earlier in the same session, the
+# fitted models (fit.list) and helper functions are reused without
+# re-running MI. running this script cold (without a prior
+# generateTables.R source) will trigger MI which takes several minutes.
 
-
-
-# ── Reuse or rebuild model infrastructure ─────────────────────────────────────
+# ── Reuse or rebuild model infrastructure ────────────────────────────────- -
 
 FIG2.DESIGNS <- unique(c("A_unrestricted", DESIGN))
 
 if (!exists("prelim.list"))
-  prelim.list <- setNames(lapply(FIG2.DESIGNS, build.prelim, dat=dat), FIG2.DESIGNS)
+  prelim.list <- setNames(lapply(FIG2.DESIGNS, build.prelim, dat=dat),
+                          FIG2.DESIGNS)
 
 if (!exists("run.mi.polr")) {
-  # mirrors generateTables.R; reproduced here so drawFigures.R is self-contained
+  # mirrors generateTables.R; reproduced here so drawFigures.R is
+  # self-contained
   MODEL.VARS  <- c("d_severity", "d_codetect", "d_agemonths",
                    "d_premature", "d_anyunderlying", "d_studysite")
   IMP.METHODS <- c(d_severity="", d_codetect="",
@@ -270,21 +312,25 @@ if (!exists("run.mi.polr")) {
   run.mi.polr <- function(prelim, m=5, seed=42) {
     mod.dat <- prelim[, .SD, .SDcols=MODEL.VARS]
     mod.dat <- mod.dat[!is.na(d_codetect) & !is.na(d_severity)]
-    mids <- mice(mod.dat, m=m, seed=seed, printFlag=FALSE, method=IMP.METHODS)
+    mids <- mice(mod.dat, m=m, seed=seed, printFlag=FALSE,
+                 method=IMP.METHODS)
     with(mids, MASS::polr(
-      d_severity ~ d_codetect + d_agemonths + d_premature + d_anyunderlying + d_studysite,
+      d_severity ~ d_codetect + d_agemonths + d_premature + d_anyunderlying +
+        d_studysite,
       Hess=TRUE))
   }
 }
 
 if (!exists("fit.list")) {
-  message("fit.list not found; running MI for Figure 2 (this may take several minutes)...")
+  message("fit.list not found; running MI for Figure 2 (this may take",
+          " several minutes)...")
   fit.list <- lapply(prelim.list[FIG2.DESIGNS], run.mi.polr)
 }
 
 if (!exists("get.pooled.codetect")) {
   get.pooled.codetect <- function(fit, design.name) {
-    sm <- as.data.table(summary(mice::pool(fit), conf.int=TRUE, exponentiate=FALSE))
+    sm <- as.data.table(summary(mice::pool(fit), conf.int=TRUE,
+                                exponentiate=FALSE))
     sm <- sm[grepl("^d_codetect", term)]
     sm[, `:=`(
       design = design.name,
@@ -297,12 +343,13 @@ if (!exists("get.pooled.codetect")) {
   }
 }
 
-# ── Extract and reshape pooled estimates ──────────────────────────────────────
+# ── Extract and reshape pooled estimates ─────────────────────────────────- -
 
 pooled.fig2 <- rbindlist(mapply(
   get.pooled.codetect, fit.list[FIG2.DESIGNS], FIG2.DESIGNS, SIMPLIFY=FALSE))
 
-fig2.wide <- dcast(pooled.fig2, level ~ design, value.var=c("or", "ci.lo", "ci.hi", "sig"))
+fig2.wide <- dcast(pooled.fig2, level ~ design,
+                   value.var=c("or", "ci.lo", "ci.hi", "sig"))
 
 # rename to design-agnostic short names for figure code below
 setnames(fig2.wide,
@@ -314,30 +361,36 @@ setnames(fig2.wide,
 # significance pattern: compare p<0.05 across both designs
 # NA in or_D means the level is absent from the active design; these are
 # excluded from the figure since no ellipse can be drawn.
-# groups with non-finite or non-positive CI bounds (e.g. near-separation from
-# sparse data) are also excluded — they would produce log(-Inf) in the scale.
+# groups with non-finite or non-positive CI bounds (e.g. near-separation
+# from sparse data) are also excluded - they would produce log(-Inf) in
+# the scale.
 fig2.wide <- fig2.wide[
   !is.na(or_A) & !is.na(or_D) &
     is.finite(ci.lo_A) & is.finite(ci.hi_A) & ci.lo_A > 0 &
     is.finite(ci.lo_D) & is.finite(ci.hi_D) & ci.lo_D > 0]
 
 if (nrow(fig2.wide) == 0)
-  stop("No co-detection groups have finite CI bounds in both designs; cannot draw Figure 2.")
+  stop(paste("No co-detection groups have finite CI bounds in both",
+             "designs; cannot draw Figure 2."))
 
 if (nrow(fig2.wide) < nrow(dcast(pooled.fig2, level ~ design)))
-  message(sprintf("Figure 2: %d group(s) excluded due to non-finite CI bounds (likely sparse data).",
-                  nrow(dcast(pooled.fig2, level ~ design)) - nrow(fig2.wide)))
+  message(sprintf(
+    paste("Figure 2: %d group(s) excluded due to non-finite CI bounds",
+          "(likely sparse data)."),
+    nrow(dcast(pooled.fig2, level ~ design)) - nrow(fig2.wide)))
 
-fig2.wide[, sig_cat:=fcase(
+fig2.wide[, sig_cat := fcase(
   sig_A &  sig_D,  "Significant in both",
   !sig_A & !sig_D,  "Not significant in either",
   default="Significance differs")]
-fig2.wide[, sig_cat:=factor(sig_cat,
-                            c("Significant in both", "Significance differs", "Not significant in either"))]
+fig2.wide[, sig_cat := factor(
+  sig_cat,
+  c("Significant in both", "Significance differs",
+    "Not significant in either"))]
 
-# ── Ellipse polygons ──────────────────────────────────────────────────────────
-# generated in log space so the semi-axes correspond to the Wald CI half-widths.
-# back-transformed to OR scale for ggplot2 + scale_*_log10().
+# ── Ellipse polygons ──────────────────────────────────────────────────────- -
+# generated in log space so the semi-axes correspond to the Wald CI
+# half-widths. back-transformed to OR scale for ggplot2 + scale_*_log10().
 
 THETA <- seq(0, 2 * pi, length.out=120)
 
@@ -353,7 +406,7 @@ ellipses <- rbindlist(lapply(seq_len(nrow(fig2.wide)), function(i) {
     y       = exp(cy + b * sin(THETA)))
 }))
 
-# ── Axis range ────────────────────────────────────────────────────────────────
+# ── Axis range ────────────────────────────────────────────────────────────- -
 # symmetric across both axes so the agreement line bisects at 45 degrees.
 # padded by 15% in log space to give labels and annotation room.
 
@@ -370,18 +423,20 @@ ax.labels  <- ifelse(ax.breaks < 1,
                      formatC(ax.breaks, format="g"),
                      as.character(ax.breaks))
 
-# ── Color palette ─────────────────────────────────────────────────────────────
+# ── Color palette ─────────────────────────────────────────────────────────- -
 SIG.COLORS <- c(
   "Significant in both"       = "#c0392b",   # red
   "Significance differs"      = "#e67e22",   # orange
   "Not significant in either" = "#7f8c8d")   # grey
 
-# ── Build figure ───────────────────────────────────────────────────────────────
+# ── Build figure ──────────────────────────────────────────────────────────- -
 
 fig2 <- ggplot() +
   # null-association reference lines (OR=1 on each axis)
-  geom_vline(xintercept=1, linewidth=0.35, linetype="dashed", color="grey55") +
-  geom_hline(yintercept=1, linewidth=0.35, linetype="dashed", color="grey55") +
+  geom_vline(xintercept=1, linewidth=0.35, linetype="dashed",
+             color="grey55") +
+  geom_hline(yintercept=1, linewidth=0.35, linetype="dashed",
+             color="grey55") +
   # 45-degree agreement line
   geom_line(data=data.table(x=ax.range, y=ax.range),
             aes(x=x, y=y), linewidth=0.55, color="black") +
@@ -403,7 +458,7 @@ fig2 <- ggplot() +
             size=2.8, vjust=-1.0, hjust=0.5, fontface="italic") +
   # scales
   scale_x_log10(
-    name    = "OR \u2014 Analysis A (Unrestricted)",
+    name    = "OR \u2014 Design A (partner co-detection unrestricted)",
     limits  = ax.range,
     breaks  = ax.breaks,
     labels  = ax.labels) +
@@ -414,7 +469,8 @@ fig2 <- ggplot() +
     labels  = ax.labels) +
   scale_fill_manual(values=SIG.COLORS,  name=NULL) +
   scale_color_manual(values=SIG.COLORS, name=NULL) +
-  # equal aspect ratio in log space so agreement line renders at true 45 degrees
+  # equal aspect ratio in log space so agreement line renders at true
+  # 45 degrees
   coord_equal() +
   theme_bw(base_size=10) +
   theme(
@@ -424,7 +480,9 @@ fig2 <- ggplot() +
     plot.background  = element_rect(fill="white", color=NA),
     plot.margin      = margin(6, 6, 6, 6))
 
-ggsave("Output/fig2_or_comparison.pdf", fig2, width=6, height=6.5, units="in")
-ggsave("Output/fig2_or_comparison.png", fig2, width=6, height=6.5, units="in", dpi=300)
+ggsave("Output/fig2_or_comparison.pdf", fig2, width=6, height=6.5,
+       units="in")
+ggsave("Output/fig2_or_comparison.png", fig2, width=6, height=6.5,
+       units="in", dpi=300)
 
 fig2

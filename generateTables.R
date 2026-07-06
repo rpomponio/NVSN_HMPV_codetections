@@ -14,21 +14,27 @@ library(gtsummary)
 
 # runs data ingest, cohort assembly, and all d_ derivations;
 # produces: dat, prelim, build.prelim(), DESIGN, CT.THRESHOLD, PATHOGENS
-# d_hospitalized and d_codetect_lab (factor) are both derived on dat in prelim.R
+# d_hospitalized and d_codetect_lab (factor) are both derived on dat in
+# prelim.R. `dat` is already restricted to HMPV-positive, CT <= CT.THRESHOLD
+# for ALL designs (A/B/C alike) - see prelim.R for details.
 source("prelim.R")
 
-# ── CT inclusion flag ─────────────────────────────────────────────────────────
-# TRUE  = case is in prelim (proceeds to downstream analysis under active DESIGN)
-# FALSE = case was excluded for any CT-related reason
-# Under Design A no cases are excluded; flag is still constructed for consistency
-dat[, d_ct_included:=factor(
+# ── CT inclusion flag ────────────────────────────────────────────────────── -
+# TRUE  = case is in prelim (proceeds to downstream analysis under active
+#         DESIGN)
+# FALSE = case was excluded for a PARTNER-CT-related reason (HMPV CT has
+#         already been restricted upstream on `dat`, identically across all
+#         designs, so it is not a source of "Excluded (CT)" here)
+# Under Design A no cases are excluded; flag is still constructed for
+# consistency
+dat[, d_ct_included := factor(
   Caseid %in% prelim$Caseid,
   c(TRUE, FALSE),
   c("Included", "Excluded (CT)"))]
 
 N.EXCLUDED <- sum(dat$d_ct_included == "Excluded (CT)")
 
-# ── Variable lists ────────────────────────────────────────────────────────────
+# ── Variable lists ───────────────────────────────────────────────────────── -
 
 DEMO.VARS <- c(
   "d_agemonths", "d_hmpv_ct", "d_sexch", "d_race_eth", "d_scrinsurance",
@@ -48,7 +54,7 @@ DEMO.LABELS <- list(
   d_studysite     = "Site",
   d_ariyear       = "Study year")
 
-# ── Shared helpers ────────────────────────────────────────────────────────────
+# ── Shared helpers ───────────────────────────────────────────────────────── -
 
 fmt.stars <- function(tbl) {
   tbl |>
@@ -56,13 +62,17 @@ fmt.stars <- function(tbl) {
     modify_table_body(
       ~dplyr::mutate(.x,
                      label=ifelse(
-                       row_type=="label" & variable %in% .x$variable[!is.na(.x$p.value) & .x$p.value < 0.001],
+                       row_type=="label" &
+                         variable %in% .x$variable[!is.na(.x$p.value) & .x$p.value < 0.001],
                        paste0(label, " ***"),
                        ifelse(
-                         row_type=="label" & variable %in% .x$variable[!is.na(.x$p.value) & .x$p.value < 0.01],
+                         row_type=="label" &
+                           variable %in% .x$variable[!is.na(.x$p.value) & .x$p.value < 0.01],
                          paste0(label, " **"),
                          ifelse(
-                           row_type=="label" & variable %in% .x$variable[!is.na(.x$p.value) & .x$p.value < 0.05],
+                           row_type=="label" &
+                             variable %in% .x$variable[
+                               !is.na(.x$p.value) & .x$p.value < 0.05],
                            paste0(label, " *"),
                            label)))))
 }
@@ -70,25 +80,42 @@ fmt.stars <- function(tbl) {
 fmt <- function(tbl, footnote.excl=NULL) {
   tbl <- tbl |>
     modify_footnote_header(
-      footnote='Column percentages shown, exclusive of missing ("Unknown") values',
+      footnote=paste('Column percentages shown, exclusive of missing',
+                     '("Unknown") values'),
       columns=all_stat_cols()) |>
     modify_indent(columns="label", rows=row_type=="level",   indent=8L) |>
     modify_indent(columns="label", rows=row_type=="missing", indent=8L)
   if (!is.null(footnote.excl)) {
     tbl <- tbl |>
-      modify_footnote_header(footnote=footnote.excl, columns=starts_with("stat_"))
+      modify_footnote_header(
+        footnote=footnote.excl, columns=starts_with("stat_"))
   }
   tbl
 }
 
-# ── TABLE 1: Demographic and clinical characteristics ─────────────────────────
-# Overall column: pre-CT cohort (all HMPV-positive cases at 4 CT sites, single
-# co-detection only). Stratified columns (Designs B/C only): Included = proceeds
-# to downstream analysis; Excluded (CT) = dropped for any CT-related reason.
+# ── TABLE 1: Demographic and clinical characteristics ───────────────────── -
+# Cohort for ALL columns (overall and stratified alike) is already restricted
+# to HMPV-positive, CT <= CT.THRESHOLD (applied once, upstream, in prelim.R -
+# not a per-design step). This differs from the original three-way design:
+# Design A is no longer a fully unrestricted comparator, so its caption/
+# footnote language below has been updated to describe only the PARTNER
+# pathogen's CT handling, not HMPV's own CT.
+#   Overall column: HMPV-positive, CT <= CT.THRESHOLD, at 4 CT-reporting
+#                    sites, single co-detection only (pre-partner-CT-filter).
+#   Stratified columns (Designs B/C only): Included = proceeds to downstream
+#                    analysis; Excluded (CT) = dropped for a partner-CT
+#                    reason (see caption note below).
+
+TAB1.CAPTION <- sprintf(
+  paste("**Table 1.** All cases are HMPV-positive with HMPV CT \u2264 %d;",
+        "this restriction is applied identically across every column and",
+        "every design (A/B/C)."),
+  CT.THRESHOLD)
 
 if (DESIGN == "A_unrestricted") {
   
-  # design A applies no CT exclusions; single overall column only
+  # design A applies no further (partner-CT) exclusions beyond the shared
+  # HMPV CT <= CT.THRESHOLD restriction; single overall column only
   tab1 <- tbl_summary(
     dat,
     label=DEMO.LABELS,
@@ -99,23 +126,31 @@ if (DESIGN == "A_unrestricted") {
       d_hospitalized  ~ "dichotomous"),
     statistic=list(
       all_continuous() ~ "{median} ({p25}, {p75})")) |>
-    fmt()
+    fmt() |>
+    modify_caption(TAB1.CAPTION)
   
 } else {
   
-  # build design-specific footnote describing what "Excluded (CT)" means
+  # build design-specific footnote describing what "Excluded (CT)" means.
+  # NOTE: HMPV CT is intentionally absent from this text - that restriction
+  # already applies to every case in `dat`, so it cannot be a reason a case
+  # is excluded at this step. Only the PARTNER pathogen's CT differs by
+  # design.
   excl.note <- if (DESIGN == "B_restricted") {
     sprintf(
-      paste("\"Excluded (CT)\": HMPV CT >%d or missing; or co-detection partner",
-            "CT >%d, missing, or inconclusive. Case dropped entirely (N=%d)."),
-      CT.THRESHOLD, CT.THRESHOLD, N.EXCLUDED)
+      paste("\"Excluded (CT)\": co-detection partner CT >%d, missing, or",
+            "inconclusive. Case dropped entirely (N=%d). (All cases are",
+            "already restricted to HMPV CT \u2264%d; see table caption.)"),
+      CT.THRESHOLD, N.EXCLUDED, CT.THRESHOLD)
   } else {
     sprintf(
-      paste("\"Excluded (CT)\": HMPV CT >%d or missing, OR partner CT missing",
-            "or inconclusive — cases dropped entirely (N=%d).",
-            "Partner CT >%d results in reclassification to HMPV monoinfection",
-            "(retained in analysis); reclassified cases are not excluded."),
-      CT.THRESHOLD, N.EXCLUDED, CT.THRESHOLD)
+      paste("\"Excluded (CT)\": co-detection partner CT missing or",
+            "inconclusive - cases dropped entirely (N=%d). Partner CT >%d",
+            "results in reclassification to HMPV monoinfection (retained",
+            "in analysis); reclassified cases are not excluded. (All cases",
+            "are already restricted to HMPV CT \u2264%d; see table",
+            "caption.)"),
+      N.EXCLUDED, CT.THRESHOLD, CT.THRESHOLD)
   }
   
   tab1 <- tbl_summary(
@@ -147,22 +182,23 @@ if (DESIGN == "A_unrestricted") {
         d_codetect_lab ~ list(simulate.p.value=TRUE, B=10000),
         d_scrinsurance ~ list(simulate.p.value=TRUE, B=10000))) |>
     modify_footnote_header(
-      footnote=paste("Wilcoxon rank-sum for continuous variables; Fisher's exact test",
-                     "for dichotomous and small-cell categorical variables; chi-square",
-                     "for site."),
+      footnote=paste("Wilcoxon rank-sum for continuous variables; Fisher's",
+                     "exact test for dichotomous and small-cell categorical",
+                     "variables; chi-square for site."),
       columns="p.value") |>
     fmt.stars() |>
-    fmt(footnote.excl=excl.note)
+    fmt(footnote.excl=excl.note) |>
+    modify_caption(TAB1.CAPTION)
 }
 
 tab1 |> as_flex_table() |> save_as_docx(path="Output/table1.docx")
 tab1
 
-# ── TABLE 2 setup ─────────────────────────────────────────────────────────────
-# build.prelim() is defined in prelim.R (sourced above); calling it here for all
-# three designs without re-sourcing or duplicating the assembly logic
+# ── TABLE 2 setup ────────────────────────────────────────────────────────── -
+# build.prelim() is defined in prelim.R (sourced above); calling it here for
+# all three designs without re-sourcing or duplicating the assembly logic
 
-# ── Build all three cohorts ───────────────────────────────────────────────────
+# ── Build all three cohorts ──────────────────────────────────────────────── -
 
 DESIGNS <- c("A_unrestricted", "B_restricted", "C_reclassify")
 
@@ -171,12 +207,13 @@ prelim.list <- setNames(lapply(DESIGNS, build.prelim, dat=dat), DESIGNS)
 invisible(lapply(names(prelim.list), function(nm)
   cat(sprintf("%-20s N=%d\n", nm, nrow(prelim.list[[nm]])))))
 
-# ── MI + ordinal regression ───────────────────────────────────────────────────
-# cases with unknown exposure (d_codetect) or outcome (d_severity) are excluded
-# via complete-case filter before imputation; imputation methods are also set
-# explicitly to "" for those two variables as a belt-and-suspenders safeguard.
-# remaining covariates (d_agemonths, d_premature, d_anyunderlying) are imputed
-# using standard mice defaults for their variable types.
+# ── MI + ordinal regression ──────────────────────────────────────────────── -
+# cases with unknown exposure (d_codetect) or outcome (d_severity) are
+# excluded via complete-case filter before imputation; imputation methods
+# are also set explicitly to "" for those two variables as a
+# belt-and-suspenders safeguard. remaining covariates (d_agemonths,
+# d_premature, d_anyunderlying) are imputed using standard mice defaults
+# for their variable types.
 # NOTE: verify imputation diagnostics (trace plots, density overlay) before
 # treating pooled results as final. m=5 is adequate for exploration;
 # increase to m>=20 for publication-ready inference.
@@ -190,28 +227,30 @@ IMP.METHODS <- c(
   d_agemonths     = "pmm",
   d_premature     = "logreg",
   d_anyunderlying = "logreg",
-  d_studysite     = "")        # fully observed enrollment variable, not imputed
+  d_studysite     = "")        # fully observed enrollment variable, not
+# imputed
 
 run.mi.polr <- function(prelim, m=5, seed=42) {
   mod.dat <- prelim[, .SD, .SDcols=MODEL.VARS]
   mod.dat <- mod.dat[!is.na(d_codetect) & !is.na(d_severity)]
   mids <- mice(mod.dat, m=m, seed=seed, printFlag=FALSE, method=IMP.METHODS)
   with(mids, MASS::polr(
-    d_severity ~ d_codetect + d_agemonths + d_premature + d_anyunderlying + d_studysite,
+    d_severity ~ d_codetect + d_agemonths + d_premature + d_anyunderlying +
+      d_studysite,
     Hess=TRUE))
 }
 
 # returns a named list of mira objects (one per design)
 fit.list <- lapply(prelim.list, run.mi.polr)
 
-# ── TABLE 2: side-by-side pooled ORs by design ───────────────────────────────
-# shows co-detection rows only; full model (including site, age, comorbidities)
-# available in fit.list for supplementary reporting
+# ── TABLE 2: side-by-side pooled ORs by design ───────────────────────────── -
+# shows co-detection rows only; full model (including site, age,
+# comorbidities) available in fit.list for supplementary reporting
 
 DESIGN.LABELS <- c(
-  A_unrestricted = "A: Unrestricted",
-  B_restricted   = "B: Restricted (CT \u226430)",
-  C_reclassify   = "C: Reclassified (CT \u226430)")
+  A_unrestricted = "A: Partner co-detection unrestricted",
+  B_restricted   = "B: Partner CT restricted (\u226430)",
+  C_reclassify   = "C: Partner CT reclassified (\u226430)")
 
 COMPARE.DESIGNS <- unique(c("A_unrestricted", DESIGN))
 
@@ -227,10 +266,11 @@ make.tbl2 <- function(nm) {
 }
 
 tab2.footnote <- paste(
-  "Proportional odds (ordinal logistic) regression; m=5 multiple imputation,",
-  "pooled via Rubin's rules. Reference: HMPV monoinfection.",
+  "Proportional odds (ordinal logistic) regression; m=5 multiple",
+  "imputation, pooled via Rubin's rules. Reference: HMPV monoinfection.",
   "Adjusted for age (months), preterm birth, any underlying condition,",
-  "and enrollment site. OR >1 indicates higher odds of more severe illness.")
+  "and enrollment site. OR >1 indicates higher odds of more severe",
+  "illness. All designs restricted to HMPV CT \u2264", CT.THRESHOLD, ".")
 
 if (length(COMPARE.DESIGNS) == 1) {
   
@@ -244,21 +284,23 @@ if (length(COMPARE.DESIGNS) == 1) {
   tab2 <- tbl_merge(
     tbl2.list,
     tab_spanner=paste0("**", DESIGN.LABELS[COMPARE.DESIGNS], "**")) |>
-    modify_footnote_header(footnote=tab2.footnote, columns=starts_with("estimate"))
+    modify_footnote_header(
+      footnote=tab2.footnote, columns=starts_with("estimate"))
 }
 
 tab2 |> as_flex_table() |> save_as_docx(path="Output/table2.docx")
 tab2
 
-# ── Conclusion-change summary ─────────────────────────────────────────────────
-# compares Design A (unrestricted, lab positivity) against the active DESIGN
-# (set at top of prelim.R). flags (a) significance flips (p<0.05 in one design
-# but not the other) and (b) direction changes (OR crosses 1.0 between designs).
-# if DESIGN == "A_unrestricted" the comparison is trivially identical; a warning
-# is printed rather than a meaningless table.
+# ── Conclusion-change summary ────────────────────────────────────────────── -
+# compares Design A (partner co-detection unrestricted) against the active
+# DESIGN (set at top of prelim.R). flags (a) significance flips (p<0.05 in
+# one design but not the other) and (b) direction changes (OR crosses 1.0
+# between designs). if DESIGN == "A_unrestricted" the comparison is
+# trivially identical; a warning is printed rather than a meaningless table.
 
 get.pooled.codetect <- function(fit, design.name) {
-  sm <- as.data.table(summary(mice::pool(fit), conf.int=TRUE, exponentiate=FALSE))
+  sm <- as.data.table(summary(mice::pool(fit), conf.int=TRUE,
+                              exponentiate=FALSE))
   sm <- sm[grepl("^d_codetect", term)]
   sm[, `:=`(
     design = design.name,
@@ -272,7 +314,8 @@ get.pooled.codetect <- function(fit, design.name) {
 
 if (DESIGN == "A_unrestricted") {
   
-  warning("DESIGN is 'A_unrestricted'; conclusion-change summary requires a CT-restricted design for comparison.")
+  warning(paste("DESIGN is 'A_unrestricted'; conclusion-change summary",
+                "requires a partner-CT-restricted design for comparison."))
   
 } else {
   
@@ -296,11 +339,11 @@ if (DESIGN == "A_unrestricted") {
   pval.a  <- paste0("p.value_", col.a);  pval.b  <- paste0("p.value_", col.b)
   sig.a   <- paste0("sig_",     col.a);  sig.b   <- paste0("sig_",     col.b)
   
-  pooled.wide[, flag_sig_flip:=xor(
+  pooled.wide[, flag_sig_flip := xor(
     get(sig.a) %in% TRUE,
     get(sig.b) %in% TRUE)]
   
-  pooled.wide[, flag_dir_change:={
+  pooled.wide[, flag_dir_change := {
     oa <- get(or.a); ob <- get(or.b)
     !is.na(oa) & !is.na(ob) & ((oa > 1 & ob < 1) | (oa < 1 & ob > 1))
   }]
@@ -314,7 +357,8 @@ if (DESIGN == "A_unrestricted") {
   }
   
   label.b <- DESIGN.LABELS[DESIGN]
-  cat(sprintf("\n\u2500\u2500 Conclusion changes: A (unrestricted) vs %s \u2500\u2500\n", label.b))
+  cat(sprintf("\n\u2500\u2500 Conclusion changes: A vs %s \u2500\u2500\n",
+              label.b))
   cat(sprintf("%-14s  %-30s  %-30s  %s  %s\n",
               "Level", "A: OR (95% CI) [p]",
               paste0(label.b, ": OR (95% CI) [p]"),

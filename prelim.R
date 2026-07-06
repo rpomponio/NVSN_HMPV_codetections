@@ -11,27 +11,31 @@
 library(MASS)
 library(data.table)
 
-# ── Data ingest ───────────────────────────────────────────────────────────────
+# ── Data ingest ──────────────────────────────────────────────────────────── -
 
 cdc <- fread("Data/Pitt_Anna_HMPV_JUL26.csv")
 
-# ── Design switch ──────────────────────────────────────────────────────────────
+# ── Design switch ────────────────────────────────────────────────────────── -
 # Controls which co-detection/CT handling rule is applied downstream.
-#   "A_unrestricted" : all HMPV-positive cases; co-detection by standard lab positivity
-#                      co-detection inconclusive: case dropped
-#   "B_restricted"   : HMPV CT >threshold or missing: case dropped
-#                      partner CT >threshold or missing: case dropped
-#   "C_reclassify"   : HMPV CT >threshold or missing: case dropped
-#                      partner CT missing: case dropped
-#                      partner CT >threshold: case retained, co-detection reclassified
-#                      to hmpv-only (d_reclassified == TRUE flags these cases)
+# NOTE: the HMPV CT <= CT.THRESHOLD restriction below is applied to `dat`
+# BEFORE this switch is used, so it is shared across all three designs
+# (A/B/C alike). The switch only controls how the PARTNER pathogen's CT is
+# handled:
+#   "A_unrestricted" : all HMPV-positive cases (already CT-restricted); partner
+#                      co-detection by standard lab positivity, unrestricted by
+#                      partner CT. co-detection inconclusive: case dropped
+#   "B_restricted"   : partner CT >threshold or missing: case dropped
+#   "C_reclassify"   : partner CT missing: case dropped
+#                      partner CT >threshold: case retained, co-detection
+#                      reclassified to hmpv-only (d_reclassified == TRUE
+#                      flags these cases)
 DESIGN <- "B_restricted"
 CT.THRESHOLD <- 30
-REMOVE.HIGH.CT <- TRUE # removes cases with HMPV CT above threshold in all designs
+REMOVE.HIGH.CT <- TRUE # restricts ALL designs to HMPV CT <= threshold
 
 stopifnot(DESIGN %in% c("A_unrestricted", "B_restricted", "C_reclassify"))
 
-# ── Integrity checks ──────────────────────────────────────────────────────────
+# ── Integrity checks ────────────────────────────────────────────────────── -
 
 any(is.na(cdc$Caseid))
 range(as.Date(cdc$scrdate, "%m/%d/%Y"), na.rm=TRUE)
@@ -40,30 +44,42 @@ table(cdc$tmpv, exclude=NULL)
 summary(cdc$tmpvCT)
 boxplot(tmpvCT ~ c_ariyear, data=cdc)
 
-# ── Site restriction: 4 CT-reporting sites ────────────────────────────────────
-# Per confirmation: Houston, Pittsburgh, Rochester, Vanderbilt (studysite 5, 8, 2, 1)
+# ── Site restriction: 4 CT-reporting sites ──────────────────────────────── -
+# Per confirmation: Houston, Pittsburgh, Rochester, Vanderbilt
+# (studysite 5, 8, 2, 1)
 
 CT.SITES <- c(1, 2, 5, 8)
 dat <- cdc[studysite %in% CT.SITES]
-dat[, d_studysite:=factor(studysite, c(1, 2, 5, 8),
-                          c("Vanderbilt", "Rochester", "Houston", "Pittsburgh"))]
+dat[, d_studysite := factor(
+  studysite, c(1, 2, 5, 8),
+  c("Vanderbilt", "Rochester", "Houston", "Pittsburgh"))]
 
-# ── Target population: HMPV-positive cases ────────────────────────────────────
+# ── Target population: HMPV-positive cases, CT-restricted ──────────────── -
 # tmpv: 0=Negative, 1=Positive, 2=Inconclusive, 8=Not performed
-# OPTIONAL: remove cases with HMPV-CT above threshold (focusing on active infections)
-dat[, d_hmpv_result:=factor(tmpv, c(0, 1, 2, 8),
-                            c("Negative", "Positive", "Inconclusive", "Not performed"))]
-dat[, d_hmpv_ct:=as.numeric(tmpvCT)]
+# HMPV CT restriction (REMOVE.HIGH.CT / CT.THRESHOLD) is applied here, on the
+# shared `dat` object, so it is now IN EFFECT FOR ALL THREE DESIGNS (A/B/C) -
+# not just the CT-restricted designs. This is a change from the original
+# three-way comparison, where Design A was meant to be fully unrestricted;
+# Design A is now unrestricted only with respect to the PARTNER pathogen's
+# CT, not HMPV's own CT. See Table 1 caption and Figure 1 in downstream
+# scripts, both of which reflect this shared restriction.
+dat[, d_hmpv_result := factor(
+  tmpv, c(0, 1, 2, 8),
+  c("Negative", "Positive", "Inconclusive", "Not performed"))]
+dat[, d_hmpv_ct := as.numeric(tmpvCT)]
 
 dat <- dat[d_hmpv_result == "Positive"]
+N.AFTER.HMPV.POS <- nrow(dat) # HMPV-positive, before CT restriction
+
 if (REMOVE.HIGH.CT) dat <- dat[d_hmpv_ct <= CT.THRESHOLD]
+N.AFTER.HMPV.CT <- nrow(dat) # HMPV-positive AND CT <= threshold (shared)
 
-# ── Demographics & covariates (prefix: d_) ────────────────────────────────────
+# ── Demographics & covariates (prefix: d_) ──────────────────────────────── -
 
-dat[, d_agemonths:=as.numeric(c_agemonths)]
+dat[, d_agemonths := as.numeric(c_agemonths)]
 dat[, d_sexch := factor(sexch, levels=c(1, 2), labels=c("Male", "Female"))]
-dat[, d_premature:=factor(c_premature, 0:1, c("No", "Yes"))]
-dat[, d_anyunderlying:=factor(c_xunderlying, 0:1, c("No", "Yes"))]
+dat[, d_premature := factor(c_premature, 0:1, c("No", "Yes"))]
+dat[, d_anyunderlying := factor(c_xunderlying, 0:1, c("No", "Yes"))]
 dat[, d_scrinsurance := factor(
   scrinsurance,
   levels = c(1, 2, 3, 4),
@@ -77,25 +93,42 @@ dat[, d_ariyear := factor(
   c_ariyear,
   levels = 1:11,
   labels = c("2015-16", "2016-17", "2017-18", "2018-19", "2019-20",
-             "2020-21", "2021-22", "2022-23", "2023-24", "2024-25", "2025-26"))]
+             "2020-21", "2021-22", "2022-23", "2023-24", "2024-25",
+             "2025-26"))]
 
-# ── Pathogen co-detection panel ────────────────────────────────────────────────
+# ── Pathogen co-detection panel ──────────────────────────────────────────── -
 # Each pathogen group: lab result variable + CT column(s). For multi-subtype
-# pathogens, the CT used downstream is the MINIMUM CT across positive subtypes
-# (most conservative - lowest CT corresponds to highest viral load).
+# pathogens, the CT used downstream is the MINIMUM CT across positive
+# subtypes (most conservative - lowest CT corresponds to highest viral
+# load).
 
 PATHOGENS <- list(
-  rsv         = list(result="c_rsv_result", ct=c("trsvCT", "trsvACT", "trsvBCT")),
-  adenovirus  = list(result="tAdeno",        ct="tAdenoCT"),
-  influenza   = list(result="anyflu_result", ct=c("tFluACT", "tFluApdmH1CT", "tFluApdmACT", "tFluAH3N2CT",
-                                                  "tFluBCT", "tFluBvicCT", "tFluCCT")),
-  piv         = list(result="piv14_pos",     ct=c("tpiv1CT", "tpiv2CT", "tpiv3CT", "tpiv4CT")),
-  rhino_ent   = list(result="rhent_pos",     ct=c("trhentCT", "trhinoCT", "tenteroCT", "tevd68CT")),
-  hcov        = list(result="hcov_pos",      ct=c("tCor229eCT", "tCorhku1CT", "tCorNL63CT", "tCorOC43CT")),
-  sarscov2    = list(result="c_sarscov2",    ct="tsarscov2ctrp")
+  rsv = list(
+    result = "c_rsv_result",
+    ct     = c("trsvCT", "trsvACT", "trsvBCT")),
+  adenovirus = list(
+    result = "tAdeno",
+    ct     = "tAdenoCT"),
+  influenza = list(
+    result = "anyflu_result",
+    ct     = c("tFluACT", "tFluApdmH1CT", "tFluApdmACT", "tFluAH3N2CT",
+               "tFluBCT", "tFluBvicCT", "tFluCCT")),
+  piv = list(
+    result = "piv14_pos",
+    ct     = c("tpiv1CT", "tpiv2CT", "tpiv3CT", "tpiv4CT")),
+  rhino_ent = list(
+    result = "rhent_pos",
+    ct     = c("trhentCT", "trhinoCT", "tenteroCT", "tevd68CT")),
+  hcov = list(
+    result = "hcov_pos",
+    ct     = c("tCor229eCT", "tCorhku1CT", "tCorNL63CT", "tCorOC43CT")),
+  sarscov2 = list(
+    result = "c_sarscov2",
+    ct     = "tsarscov2ctrp")
 )
 
-# build d_<pathogen>_result (factor) and d_<pathogen>_ct (numeric, min across subtypes)
+# build d_<pathogen>_result (factor) and d_<pathogen>_ct (numeric, min
+# across subtypes)
 for (p in names(PATHOGENS)) {
   res.var <- PATHOGENS[[p]]$result
   ct.vars <- PATHOGENS[[p]]$ct
@@ -103,17 +136,18 @@ for (p in names(PATHOGENS)) {
   res.col <- paste0("d_", p, "_result")
   ct.col  <- paste0("d_", p, "_ct")
   
-  # NOTE: result coding (0/1/2[/8]) is not fully uniform across these variables -
-  # verify against the dictionary before trusting labels for sarscov2/hcov/piv/rhent,
-  # which only show 0/1/2 (no explicit "not performed" code in the dictionary excerpt)
-  dat[, (res.col):=fcase(
+  # NOTE: result coding (0/1/2[/8]) is not fully uniform across these
+  # variables - verify against the dictionary before trusting labels for
+  # sarscov2/hcov/piv/rhent, which only show 0/1/2 (no explicit "not
+  # performed" code in the dictionary excerpt)
+  dat[, (res.col) := fcase(
     get(res.var) == 1, "Positive",
     get(res.var) == 0, "Negative",
     get(res.var) == 2, "Inconclusive",
     default="Not performed")]
   
   # row-wise min CT across subtype columns, NA if all missing
-  dat[, (ct.col):=apply(.SD, 1, function(x) {
+  dat[, (ct.col) := apply(.SD, 1, function(x) {
     x <- suppressWarnings(as.numeric(x))
     if (all(is.na(x))) NA_real_ else min(x, na.rm=TRUE)
   }), .SDcols=ct.vars]
@@ -126,82 +160,93 @@ for (p in names(PATHOGENS)) {
 # exclusion counts separately from the subsequent multi-codetect filter
 N.AFTER.INCONCLUSIVE <- nrow(dat)
 
-# ── Co-detection classification: Analysis A (lab positivity, unrestricted) ───
-# Identifies which (if any) partner pathogen(s) are lab-positive alongside HMPV.
-# EXCLUDE cases positive for >1 non-HMPV pathogen, cannot be cleanly assigned
-# to a single pairwise reference category. 
+# ── Co-detection classification: Analysis A (lab positivity) ───────────── -
+# Identifies which (if any) partner pathogen(s) are lab-positive alongside
+# HMPV. EXCLUDE cases positive for >1 non-HMPV pathogen, cannot be cleanly
+# assigned to a single pairwise reference category.
 
 RESULT.COLS <- paste0("d_", names(PATHOGENS), "_result")
 
-dat[, d_n_codetect_lab:=rowSums(.SD == "Positive", na.rm=TRUE), .SDcols=RESULT.COLS]
+dat[, d_n_codetect_lab := rowSums(.SD == "Positive", na.rm=TRUE),
+    .SDcols=RESULT.COLS]
 
 dat <- dat[d_n_codetect_lab <= 1]
 
-dat[, d_codetect_lab:=fcase(
+dat[, d_codetect_lab := fcase(
   d_n_codetect_lab == 0, "hmpv-only",
-  default=names(PATHOGENS)[apply(.SD, 1, function(x) which(x == "Positive")[1])]),
+  default=names(PATHOGENS)[
+    apply(.SD, 1, function(x) which(x == "Positive")[1])]),
   .SDcols=RESULT.COLS]
-dat[, d_codetect_lab:=factor(d_codetect_lab, c("hmpv-only", names(PATHOGENS)))]
-dat[, d_codetect_lab:=droplevels(d_codetect_lab)]
+dat[, d_codetect_lab := factor(
+  d_codetect_lab, c("hmpv-only", names(PATHOGENS)))]
+dat[, d_codetect_lab := droplevels(d_codetect_lab)]
 
-# ── Cohort assembly ────────────────────────────────────────────────────────────
-# d_hospitalized derived here on dat so it is available on both dat and prelim
-# (prelim is a copy/subset of dat; generateTables.R uses dat for the Table 1
-# overall column, which requires d_hospitalized on the pre-CT cohort)
-dat[, d_hospitalized:=fifelse(c_finalstatus == 1, "Hospitalized", "Not Hospitalized")]
+# ── Cohort assembly ──────────────────────────────────────────────────────── -
+# d_hospitalized derived here on dat so it is available on both dat and
+# prelim (prelim is a copy/subset of dat; generateTables.R uses dat for the
+# Table 1 overall column, which requires d_hospitalized on the pre-partner-CT
+# cohort - note this cohort is already HMPV CT-restricted, see note above)
+dat[, d_hospitalized := fifelse(
+  c_finalstatus == 1, "Hospitalized", "Not Hospitalized")]
 
-# build.prelim() is the single definition of design-specific cohort assembly and
-# outcome derivation. called below for the active DESIGN; generateTables.R sources
-# this file and calls build.prelim() for all three designs without re-sourcing.
+# build.prelim() is the single definition of design-specific cohort assembly
+# and outcome derivation. called below for the active DESIGN;
+# generateTables.R sources this file and calls build.prelim() for all three
+# designs without re-sourcing.
 build.prelim <- function(dat, design, ct.threshold=CT.THRESHOLD) {
   
   if (design == "A_unrestricted") {
+    # NOTE: "unrestricted" now refers only to the partner pathogen's CT -
+    # HMPV CT restriction has already been applied to `dat` upstream and
+    # affects this design equally
     out <- copy(dat)
-    out[, d_codetect:=d_codetect_lab]
+    out[, d_codetect := d_codetect_lab]
   } else {
-    # drop if HMPV CT fails threshold (shared step for B and C)
-    out <- dat[d_hmpv_ct <= ct.threshold]
-    out[, d_partner_ct:=as.numeric(NA)]
+    out <- copy(dat)
+    out[, d_partner_ct := as.numeric(NA)]
     for (i in which(out[, d_n_codetect_lab == 1])) {
       pth <- as.character(out$d_codetect_lab[i])
-      out[i, d_partner_ct:=get(paste0("d_", pth, "_ct"))]
+      out[i, d_partner_ct := get(paste0("d_", pth, "_ct"))]
     }
     
-    out[, d_partner_ct_missing:=fcase(
+    out[, d_partner_ct_missing := fcase(
       d_n_codetect_lab == 1 & is.na(d_partner_ct), TRUE,
       default=FALSE)]
     
-    out[, d_partner_ct_high:=fcase(
-      d_n_codetect_lab == 1 & !is.na(d_partner_ct) & d_partner_ct > ct.threshold, TRUE,
+    out[, d_partner_ct_high := fcase(
+      d_n_codetect_lab == 1 & !is.na(d_partner_ct) &
+        d_partner_ct > ct.threshold, TRUE,
       default=FALSE)]
     
     if (design == "B_restricted") {
       # B: drop on either reason
       out <- out[d_partner_ct_missing == FALSE & d_partner_ct_high == FALSE]
-      out[, d_codetect:=d_codetect_lab]
+      out[, d_codetect := d_codetect_lab]
       
     } else if (design == "C_reclassify") {
       # C: drop only if missing, reclassify if high
       n.dropped.missing <- sum(out$d_partner_ct_missing)
       out <- out[d_partner_ct_missing == FALSE]
-      out[, d_reclassified:=d_partner_ct_high]
-      out[, d_codetect:=fcase(
+      out[, d_reclassified := d_partner_ct_high]
+      out[, d_codetect := fcase(
         d_partner_ct_high == TRUE, "hmpv-only",
         default=as.character(d_codetect_lab))]
-      cat(sprintf("Design C: %d reclassified (CT >%d); %d dropped (CT missing)\n",
-                  sum(out$d_reclassified), ct.threshold, n.dropped.missing))
+      cat(sprintf(
+        "Design C: %d reclassified (CT >%d); %d dropped (CT missing)\n",
+        sum(out$d_reclassified), ct.threshold, n.dropped.missing))
     }
   }
   
-  # factor d_codetect from its per-design value (not d_codetect_lab — would undo
-  # reclassification for Design C)
-  out[, d_codetect:=factor(d_codetect, c("hmpv-only", names(PATHOGENS)))]
-  out[, d_codetect:=droplevels(d_codetect)]
+  # factor d_codetect from its per-design value (not d_codetect_lab - would
+  # undo reclassification for Design C)
+  out[, d_codetect := factor(d_codetect, c("hmpv-only", names(PATHOGENS)))]
+  out[, d_codetect := droplevels(d_codetect)]
   
   # derive outcome: 6-level ordinal illness severity
   # c_finalstatus: 1=Inpatient, 2=ED, 3=Outpatient, 5=Urgent Care
-  # d_hospitalized is on dat before this call; inherited by out as copy/subset
-  out[, d_severity:=fcase(
+  # d_hospitalized is on dat before this call; inherited by out as
+  # copy/subset
+  out[, d_severity := fcase(
     c_died      == 1L, 6L,
     c_intubated == 1L, 5L,
     inptEcmo    == 1L, 5L,
@@ -210,21 +255,23 @@ build.prelim <- function(dat, design, ct.threshold=CT.THRESHOLD) {
                                           c_hfnc == 1L | c_cpap == 1L), 3L,
     d_hospitalized == "Hospitalized", 2L,
     default=1L)]
-  out[, d_severity:=factor(d_severity, levels=1:6,
-                           labels=c("Discharge", "Hospitalized", "Hospitalized + O2",
-                                    "ICU", "Ventilated / ECMO", "Died"),
-                           ordered=TRUE)]
+  out[, d_severity := factor(
+    d_severity, levels=1:6,
+    labels=c("Discharge", "Hospitalized", "Hospitalized + O2",
+             "ICU", "Ventilated / ECMO", "Died"),
+    ordered=TRUE)]
   out
 }
 
 prelim <- build.prelim(dat, DESIGN)
 
-cat(sprintf("Design: %s | N retained: %d (of %d HMPV-positive at CT sites)\n",
-            DESIGN, nrow(prelim), nrow(dat)))
+cat(sprintf(
+  "Design: %s | N retained: %d (of %d HMPV-positive, CT <= %d, at CT sites)\n",
+  DESIGN, nrow(prelim), nrow(dat), CT.THRESHOLD))
 table(prelim$d_codetect, exclude=NULL)
 table(prelim$d_severity, exclude=NULL)
 
-# ── Missingness check on key analytic variables (flag >10% missing) ──────────
+# ── Missingness check on key analytic variables (flag >10% missing) ────── -
 
 KEY.VARS <- c("d_agemonths", "d_premature", "d_anyunderlying", "d_severity",
               "d_codetect", "d_studysite")
