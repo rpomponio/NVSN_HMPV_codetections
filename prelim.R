@@ -126,7 +126,7 @@ PATHOGENS <- list(
     ct     = c("tCor229eCT", "tCorhku1CT", "tCorNL63CT", "tCorOC43CT")),
   sarscov2 = list(
     result = "c_sarscov2",
-    ct     = "tsarscov2ctrp")
+    ct     = "tsarscov2ctrp", "tsarscov2p1ct", "tsarscov2p2ct")
 )
 
 # build d_<pathogen>_result (factor) and d_<pathogen>_ct (numeric, min
