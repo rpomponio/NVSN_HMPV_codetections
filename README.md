@@ -66,7 +66,7 @@ install.packages(c(
 ```
 project/
 ├── Data/
-│   └── Pitt_Anna_HMPV_JUN26.csv          ← raw NVSN extract (not under version control)
+│   └── Pitt_Anna_HMPV_JUL26.csv          ← raw NVSN extract (not under version control)
 ├── Output/                                ← tables (.docx) and figures (.pdf/.png) written here
 ├── prelim.R                               ← data ingest, cohort assembly, all derivations
 ├── generateTables.R                       ← Table 1 and Table 2
@@ -182,7 +182,7 @@ All figures are saved automatically to `Output/` as both `.pdf` and `.png`:
 - **Seed:** Multiple imputation in `generateTables.R` uses `seed = 42` in `run.mi.polr()`.
   Results will be exactly reproducible across runs on the same R version and `mice`
   version. Upgrading either may produce minor numerical differences.
-- **Data file:** `Data/Pitt_Anna_HMPV_JUN26.csv` is not under version control. Contact
+- **Data file:** `Data/Pitt_Anna_HMPV_JUL26.csv` is not under version control. Contact
   the CDC data manager for the most recent extract.
 - **Working directory:** All scripts use relative paths (`"Data/..."`, `"Output/..."`).
   Set the working directory to the project root before sourcing any script:
@@ -190,9 +190,3 @@ All figures are saved automatically to `Output/` as both `.pdf` and `.png`:
 ```r
   setwd("/path/to/project")
 ```
-
-- **Influenza CT caveat:** `tFluACT` (influenza A CT value) appears to have been withheld
-  from the extract for unknown administrative reasons. Influenza co-detection cases are
-  therefore likely to fail the partner CT restriction at high rates under Designs B and C
-  due to structural missingness rather than high viral load. Treat influenza results under
-  CT-restricted designs with caution pending clarification from the CDC data manager.
