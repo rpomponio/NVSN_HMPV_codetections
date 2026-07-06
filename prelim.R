@@ -13,7 +13,7 @@ library(data.table)
 
 # ── Data ingest ───────────────────────────────────────────────────────────────
 
-cdc <- fread("Data/Pitt_Anna_HMPV_JUN26.csv")
+cdc <- fread("Data/Pitt_Anna_HMPV_JUL26.csv")
 
 # ── Design switch ──────────────────────────────────────────────────────────────
 # Controls which co-detection/CT handling rule is applied downstream.
@@ -27,13 +27,14 @@ cdc <- fread("Data/Pitt_Anna_HMPV_JUN26.csv")
 #                      to hmpv-only (d_reclassified == TRUE flags these cases)
 DESIGN <- "B_restricted"
 CT.THRESHOLD <- 30
+REMOVE.HIGH.CT <- TRUE # removes cases with HMPV CT above threshold in all designs
 
 stopifnot(DESIGN %in% c("A_unrestricted", "B_restricted", "C_reclassify"))
 
 # ── Integrity checks ──────────────────────────────────────────────────────────
 
 any(is.na(cdc$Caseid))
-range(cdc$scrdate, na.rm=TRUE)
+range(as.Date(cdc$scrdate, "%m/%d/%Y"), na.rm=TRUE)
 table(cdc$studysite, exclude=NULL)
 table(cdc$tmpv, exclude=NULL)
 summary(cdc$tmpvCT)
@@ -83,7 +84,7 @@ dat[, d_ariyear := factor(
 PATHOGENS <- list(
   rsv         = list(result="c_rsv_result", ct=c("trsvCT", "trsvACT", "trsvBCT")),
   adenovirus  = list(result="tAdeno",        ct="tAdenoCT"),
-  influenza   = list(result="anyflu_result", ct=c("tFluApdmH1CT", "tFluApdmACT", "tFluAH3N2CT",
+  influenza   = list(result="anyflu_result", ct=c("tFluACT", "tFluApdmH1CT", "tFluApdmACT", "tFluAH3N2CT",
                                                   "tFluBCT", "tFluBvicCT", "tFluCCT")),
   piv         = list(result="piv14_pos",     ct=c("tpiv1CT", "tpiv2CT", "tpiv3CT", "tpiv4CT")),
   rhino_ent   = list(result="rhent_pos",     ct=c("trhentCT", "trhinoCT", "tenteroCT", "tevd68CT")),
@@ -116,6 +117,8 @@ for (p in names(PATHOGENS)) {
   
   # NOTE: (res.col) in data.table i evaluates to the literal string e.g.
   # "d_rsv_result", not the column — get() is required for variable-name lookup
+  cat(sprintf("Removing %d inconclusive results for pathogen: %s.\n",
+              sum(dat[, get(res.col)=="Inconclusive"]), p))
   dat <- dat[get(res.col) != "Inconclusive"]
 }
 
@@ -155,10 +158,10 @@ build.prelim <- function(dat, design, ct.threshold=CT.THRESHOLD) {
   if (design == "A_unrestricted") {
     out <- copy(dat)
     out[, d_codetect:=d_codetect_lab]
-    
+    if (REMOVE.HIGH.CT) out <- dat[d_hmpv_ct <= ct.threshold]
   } else {
-    # drop if HMPV CT missing or fails threshold (shared step for B and C)
-    out <- dat[!is.na(d_hmpv_ct) & d_hmpv_ct <= ct.threshold]
+    # drop if HMPV CT fails threshold (shared step for B and C)
+    out <- dat[d_hmpv_ct <= ct.threshold]
     out[, d_partner_ct:=as.numeric(NA)]
     for (i in which(out[, d_n_codetect_lab == 1])) {
       pth <- as.character(out$d_codetect_lab[i])
