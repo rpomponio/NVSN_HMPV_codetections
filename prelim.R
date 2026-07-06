@@ -112,7 +112,9 @@ PATHOGENS <- list(
   influenza = list(
     result = "anyflu_result",
     ct     = c("tFluACT", "tFluApdmH1CT", "tFluApdmACT", "tFluAH3N2CT",
-               "tFluBCT", "tFluBvicCT", "tFluCCT")),
+               "tFluBCT", "tFluBvicCT", "tFluCCT",
+               "sFluApdmH1CT", "sFluApdmACT", "sFluAH3N2CT",
+               "sFluBvicCT", "sFluCCT")),
   piv = list(
     result = "piv14_pos",
     ct     = c("tpiv1CT", "tpiv2CT", "tpiv3CT", "tpiv4CT")),
