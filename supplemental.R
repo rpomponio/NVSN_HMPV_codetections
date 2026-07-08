@@ -136,6 +136,7 @@ sup1 <- tbl_summary(
     all_continuous() ~ "{median} ({p25}, {p75})")) |>
   add_overall(last=FALSE)
 
+sup1 |> as_flex_table() |> save_as_docx(path="Output/sup_table1.docx")
 sup1
 
 # ── MI + ordinal regression ──────────────────────────────────────────────── -
@@ -184,3 +185,6 @@ sup2 <- tbl_regression(
   modify_header(estimate="**OR (95% CI)**") |>
   add_n(location="level") |>
   bold_p(t=0.05)
+
+sup2 |> as_flex_table() |> save_as_docx(path="Output/sup_table2.docx")
+sup2
