@@ -10,7 +10,7 @@ library(data.table)
 
 # ── Data ingest ──────────────────────────────────────────────────────────── -
 
-cdc <- fread("Data/Pitt_Anna_HMPV_JUL26.csv")
+cdc <- fread("Data/Pitt_Anna_HMPV_SEP26.csv")
 dat <- copy(cdc)
 
 dat[, d_studysite:=factor(studysite, c(8, 1:6),
@@ -150,4 +150,14 @@ fwrite(
   dat[, ..sel.cols],
   file.path("Archive/all_mpvPositive_analyticalSample_withCodetectionLabels.csv"))
 
+# ── Line List Agreement ──────────────────────────────────────────────────── -
 
+llist <- readxl::read_xlsx("Data/PITT HMPV specimen line list 9.25.24.xlsx",
+                           col_types=c("text", "text", "text", "text", "date",
+                                       "date", "numeric"))
+
+# Which samples in the line list are not in the master list?
+! llist$Caseid %in% dat$Caseid
+
+# What about the source list?
+all(! llist$Caseid %in% cdc$Caseid == ! llist$Caseid %in% dat$Caseid)
